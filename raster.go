@@ -490,6 +490,7 @@ func (r *Rasterizer) accumulateEdgeInColumn(e *edge, yTop, yBot float64, sign fl
 // integrateScanlineNonZero converts accumulated cover/area to final coverage
 // values using the nonzero winding rule. The cover slice is modified in place.
 func integrateScanlineNonZero(cover, area []float32) {
+	area = area[:len(cover)] // bounds check elimination hint
 	var accum float32
 	for i := range cover {
 		raw := accum + area[i]
@@ -510,19 +511,23 @@ func integrateScanlineNonZero(cover, area []float32) {
 // integrateScanlineEvenOdd converts accumulated cover/area to final coverage
 // values using the even-odd fill rule. The cover slice is modified in place.
 func integrateScanlineEvenOdd(cover, area []float32) {
+	area = area[:len(cover)] // bounds check elimination hint
 	var accum float32
 	for i := range cover {
 		raw := accum + area[i]
 		accum += cover[i]
 
-		// 1 - abs(1 - mod(abs(raw), 2))
+		// even-odd: 1 - |1 - mod(|raw|, 2)|
+		// for |raw| ≤ 1 this simplifies to |raw|
 		if raw < 0 {
 			raw = -raw
 		}
-		// mod(raw, 2) using floor
+		if raw <= 1 {
+			cover[i] = raw
+			continue
+		}
 		mod := raw - 2*float32(int(raw/2))
-		cov := 1 - abs32(1-mod)
-		cover[i] = cov
+		cover[i] = 1 - abs32(1-mod)
 	}
 }
 
