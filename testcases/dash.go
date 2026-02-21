@@ -292,6 +292,38 @@ var dashCases = []TestCase{
 		},
 	},
 
+	// Pattern [0, 5] with non-zero phase (phase must advance past zero-length element)
+	{
+		Name:   "dash_zero_phase_round",
+		Path:   horizontalLine(5, 32, 59),
+		Width:  64,
+		Height: 64,
+		Op: Stroke{
+			Width:      4,
+			Cap:        graphics.LineCapRound,
+			Join:       graphics.LineJoinMiter,
+			MiterLimit: 10,
+			Dash:       []float64{0, 5},
+			DashPhase:  3,
+		},
+	},
+
+	// Pattern [0, 5, 10, 5] with non-zero phase (phase advances past zero-length element)
+	{
+		Name:   "dash_zero_mixed_phase",
+		Path:   horizontalLine(5, 32, 59),
+		Width:  64,
+		Height: 64,
+		Op: Stroke{
+			Width:      4,
+			Cap:        graphics.LineCapRound,
+			Join:       graphics.LineJoinMiter,
+			MiterLimit: 10,
+			Dash:       []float64{0, 5, 10, 5},
+			DashPhase:  7,
+		},
+	},
+
 	// ==========================================================================
 	// Section 3.4: Dashes at Corners
 	// ==========================================================================

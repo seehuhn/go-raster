@@ -704,10 +704,11 @@ func (r *Rasterizer) applyDashPattern() {
 			continue
 		}
 
-		// Find starting dash index and remaining distance in that dash
+		// starting dash index and remaining distance in that dash,
+		// advancing past zero-length dash elements while consuming phase
 		dashIdx := 0
 		dist := phase
-		for dist >= dash[dashIdx%dashLen] && dash[dashIdx%dashLen] > 0 {
+		for dist > 0 && dist >= dash[dashIdx%dashLen] {
 			dist -= dash[dashIdx%dashLen]
 			dashIdx++
 		}
