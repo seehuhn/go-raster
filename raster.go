@@ -224,6 +224,10 @@ const (
 
 // fill is the internal implementation shared by FillNonZero and FillEvenOdd.
 func (r *Rasterizer) fill(p path.Path, rule fillRule, emit func(y, xMin int, coverage []float32)) {
+	if r.Flatness <= 0 {
+		panic("raster: Flatness must be positive")
+	}
+
 	// Collect edges from path (returns bounding box clamped to clip)
 	xMin, xMax, yMin, yMax, ok := r.collectPathEdges(p)
 	if !ok {

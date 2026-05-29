@@ -35,6 +35,13 @@ type strokeSegment struct {
 // MiterLimit, Dash, and DashPhase. The emit callback receives coverage
 // row-by-row; its slice argument is valid only during the call.
 func (r *Rasterizer) Stroke(p path.Path, emit func(y, xMin int, coverage []float32)) {
+	if r.Flatness <= 0 {
+		panic("raster: Flatness must be positive")
+	}
+	if r.Width <= 0 {
+		panic("raster: Width must be positive")
+	}
+
 	// Flatten path into subpaths (results stored in r.segs, etc.)
 	r.flattenPath(p)
 	if len(r.segsOffsets) == 0 && len(r.degeneratePoints) == 0 {

@@ -177,19 +177,21 @@ func compareImages(name string, expected, actual []byte, w, h int) error {
 	p95 := diffs[int(math.Round(0.95*float64(total-1)))]
 	p99 := diffs[int(math.Round(0.99*float64(total-1)))]
 
-	// Check criteria:
+	// Check criteria (thresholds set just above the observed worst case
+	// across all reference images, leaving headroom for cross-platform
+	// floating-point drift):
 	// - at least 80% of pixels are identical (p80 == 0)
-	// - at least 95% of differences are < 64 (p95 < 64)
-	// - at least 99% of differences are < 128 (p99 < 128)
+	// - at least 95% of differences are < 48 (p95 < 48)
+	// - at least 99% of differences are < 96 (p99 < 96)
 	var failures []string
 	if p80 > 0 {
 		failures = append(failures, fmt.Sprintf("80th percentile diff is %d (want 0)", p80))
 	}
-	if p95 >= 64 {
-		failures = append(failures, fmt.Sprintf("95th percentile diff is %d (want <64)", p95))
+	if p95 >= 48 {
+		failures = append(failures, fmt.Sprintf("95th percentile diff is %d (want <48)", p95))
 	}
-	if p99 >= 128 {
-		failures = append(failures, fmt.Sprintf("99th percentile diff is %d (want <128)", p99))
+	if p99 >= 96 {
+		failures = append(failures, fmt.Sprintf("99th percentile diff is %d (want <96)", p99))
 	}
 
 	if len(failures) > 0 {

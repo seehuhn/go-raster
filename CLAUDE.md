@@ -59,11 +59,13 @@ The rasterizer computes signed trapezoidal area contributions per pixel:
 
 ## Test Infrastructure
 
-Tests compare rendered output against Ghostscript-rendered reference images in `testdata/reference/`.
+Tests compare rendered output against Ghostscript-rendered reference images in
+`testdata/reference/`. The pass/fail tolerance is defined by the percentile
+thresholds in `compareImages` (raster_test.go).
 
-Tolerance: ±2 per pixel, max 10% of pixels may differ.
-
-On failure: diff images written to `debug/` (red=expected, green=actual).
+On failure: a 3-panel image is written to `debug/`: actual output (left),
+diff (middle), reference (right). In the diff panel green marks under-production
+(expected > actual) and red marks over-production (expected < actual).
 
 ### Adding Test Cases
 
