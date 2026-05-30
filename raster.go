@@ -147,7 +147,8 @@ func (r *Rasterizer) flattenQuadratic(p0, p1, p2 vec.Vec2, emit func(from, to ve
 	n := 1
 	errDev := eDev.Length()
 	if errDev > r.Flatness {
-		n = int(math.Ceil(math.Sqrt(errDev / r.Flatness)))
+		// cap before the int conversion so an extreme CTM cannot overflow it
+		n = int(min(math.Ceil(math.Sqrt(errDev/r.Flatness)), maxFlattenSegments))
 	}
 
 	// Evaluate curve at n+1 points and emit segments
@@ -180,7 +181,8 @@ func (r *Rasterizer) flattenCubic(p0, p1, p2, p3 vec.Vec2, emit func(from, to ve
 		// n = ceil(sqrt(3 * mDev / (4 * ε)))
 		nFloat := math.Sqrt(3 * mDev / (4 * r.Flatness))
 		if nFloat > 1 {
-			n = int(math.Ceil(nFloat))
+			// cap before the int conversion so an extreme CTM cannot overflow it
+			n = int(min(math.Ceil(nFloat), maxFlattenSegments))
 		}
 	}
 
@@ -297,16 +299,25 @@ func (r *Rasterizer) collectPathEdges(p path.Path) (xMin, xMax, yMin, yMax int, 
 		return 0, 0, 0, 0, false
 	}
 
+	// a non-finite CTM yields NaN extremes; treat the path as degenerate
+	if math.IsNaN(r.edgeDevXMin) || math.IsNaN(r.edgeDevXMax) ||
+		math.IsNaN(r.edgeDevYMin) || math.IsNaN(r.edgeDevYMax) {
+		return 0, 0, 0, 0, false
+	}
+
 	// clamp to clip bounds and convert to integers
 	clipXMin := int(r.Clip.LLx)
 	clipXMax := int(r.Clip.URx)
 	clipYMin := int(r.Clip.LLy)
 	clipYMax := int(r.Clip.URy)
 
-	xMin = max(int(math.Floor(r.edgeDevXMin)), clipXMin)
-	xMax = min(int(math.Floor(r.edgeDevXMax))+1, clipXMax)
-	yMin = max(int(math.Floor(r.edgeDevYMin)), clipYMin)
-	yMax = min(int(math.Floor(r.edgeDevYMax))+1, clipYMax)
+	// The +1 turns the inclusive max pixel into an exclusive upper bound.
+	// Clamping to clipMax-1 first keeps that +1 within the int range even when
+	// floorToInt saturates on an extreme CTM.
+	xMin = max(floorToInt(r.edgeDevXMin), clipXMin)
+	xMax = min(floorToInt(r.edgeDevXMax), clipXMax-1) + 1
+	yMin = max(floorToInt(r.edgeDevYMin), clipYMin)
+	yMax = min(floorToInt(r.edgeDevYMax), clipYMax-1) + 1
 
 	if xMin >= xMax || yMin >= yMax {
 		return 0, 0, 0, 0, false
@@ -350,6 +361,24 @@ func (r *Rasterizer) addEdge(p0, p1 vec.Vec2) {
 		r.edgeDevXMax = max(r.edgeDevXMax, max(dx0, dx1))
 		r.edgeDevYMin = min(r.edgeDevYMin, min(dy0, dy1))
 		r.edgeDevYMax = max(r.edgeDevYMax, max(dy0, dy1))
+	}
+}
+
+// floorToInt floors f and converts it to int, saturating values outside the
+// int range to the int extremes. This keeps the device-space bounding box
+// well-defined even when an extreme CTM produces coordinates beyond MaxInt;
+// the caller clamps the result to the clip bounds. NaN is not expected here
+// (collectPathEdges rejects non-finite extremes first) and maps to zero.
+func floorToInt(f float64) int {
+	switch {
+	case math.IsNaN(f):
+		return 0
+	case f <= float64(math.MinInt):
+		return math.MinInt
+	case f >= float64(math.MaxInt):
+		return math.MaxInt
+	default:
+		return int(math.Floor(f))
 	}
 }
 
@@ -769,4 +798,20 @@ const (
 	// cuspCosineThreshold is the cosine threshold for detecting cusps
 	// (path doubling back on itself). cos(179.43°) ≈ -0.9999
 	cuspCosineThreshold = -0.9999
+
+	// maxFlattenSegments bounds the number of line segments a single curve or
+	// arc is flattened into. A curve never needs more segments than there are
+	// device pixels along it, so this ceiling cannot affect legitimate output
+	// (the segment count stays in the low hundreds even on a large canvas).
+	// It stops an attacker-controlled CTM scale from driving the count out of
+	// range and hanging the rasterizer.
+	maxFlattenSegments = 1 << 16
+
+	// maxDashSegments bounds the number of dash pieces a single subpath is
+	// split into. A pattern fine enough to exceed this is sub-pixel on any
+	// reasonable canvas (the piece count is independent of the CTM), so the
+	// ceiling cannot affect legitimate output; it stops an attacker-controlled
+	// dash array from driving the dash loop out of range and hanging the
+	// rasterizer.
+	maxDashSegments = 1 << 16
 )

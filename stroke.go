@@ -638,7 +638,8 @@ func (r *Rasterizer) addArc(center vec.Vec2, radius float64, startDir vec.Vec2, 
 	if angleStep <= 0 || math.IsNaN(angleStep) {
 		angleStep = math.Pi / 4 // fallback
 	}
-	n := int(math.Ceil(absSweep / angleStep))
+	// cap before the int conversion so an extreme CTM cannot overflow it
+	n := int(min(math.Ceil(absSweep/angleStep), maxFlattenSegments))
 	n = max(n, 1)
 
 	// Generate arc points
@@ -685,10 +686,11 @@ func (r *Rasterizer) applyDashPattern() {
 	dashLen := len(dash)
 
 	// Compute total pattern length (doubled for odd-length patterns)
-	patternLen := 0.0
+	rawSum := 0.0
 	for _, d := range dash {
-		patternLen += d
+		rawSum += d
 	}
+	patternLen := rawSum
 	if dashLen%2 == 1 {
 		patternLen *= 2
 	}
@@ -708,6 +710,25 @@ func (r *Rasterizer) applyDashPattern() {
 		segments := r.getSubpathSegments(spIdx)
 		closed := r.subpathClosed[spIdx]
 		if len(segments) == 0 {
+			continue
+		}
+
+		// guard against a pathologically fine dash pattern: splitting this
+		// subpath into more than maxDashSegments pieces would be sub-pixel on
+		// any reasonable canvas, so stroke it solid instead of hanging. The dash
+		// loop consumes one element per piece, so the piece count is
+		// subpathLen/patternLen periods times the elements per period; dividing
+		// by the un-doubled sum folds in the odd-length doubling of patternLen.
+		// A closed subpath taken down this path gets caps rather than a closing
+		// join, but only in this invisible regime.
+		subpathLen := 0.0
+		for _, seg := range segments {
+			subpathLen += seg.B.Sub(seg.A).Length()
+		}
+		if subpathLen*float64(dashLen)/rawSum > float64(maxDashSegments) {
+			dashStart := len(r.dashedSegs)
+			r.dashedSegs = append(r.dashedSegs, segments...)
+			r.dashedSegsOffsets = append(r.dashedSegsOffsets, dashStart)
 			continue
 		}
 
@@ -889,16 +910,25 @@ func (r *Rasterizer) collectStrokeEdges() (xMin, xMax, yMin, yMax int, ok bool) 
 		return 0, 0, 0, 0, false
 	}
 
-	// Clamp to clip bounds and convert to integers
+	// a non-finite CTM yields NaN extremes; treat the path as degenerate
+	if math.IsNaN(r.edgeDevXMin) || math.IsNaN(r.edgeDevXMax) ||
+		math.IsNaN(r.edgeDevYMin) || math.IsNaN(r.edgeDevYMax) {
+		return 0, 0, 0, 0, false
+	}
+
+	// clamp to clip bounds and convert to integers
 	clipXMin := int(r.Clip.LLx)
 	clipXMax := int(r.Clip.URx)
 	clipYMin := int(r.Clip.LLy)
 	clipYMax := int(r.Clip.URy)
 
-	xMin = max(int(math.Floor(r.edgeDevXMin)), clipXMin)
-	xMax = min(int(math.Floor(r.edgeDevXMax))+1, clipXMax)
-	yMin = max(int(math.Floor(r.edgeDevYMin)), clipYMin)
-	yMax = min(int(math.Floor(r.edgeDevYMax))+1, clipYMax)
+	// The +1 turns the inclusive max pixel into an exclusive upper bound.
+	// Clamping to clipMax-1 first keeps that +1 within the int range even when
+	// floorToInt saturates on an extreme CTM.
+	xMin = max(floorToInt(r.edgeDevXMin), clipXMin)
+	xMax = min(floorToInt(r.edgeDevXMax), clipXMax-1) + 1
+	yMin = max(floorToInt(r.edgeDevYMin), clipYMin)
+	yMax = min(floorToInt(r.edgeDevYMax), clipYMax-1) + 1
 
 	if xMin >= xMax || yMin >= yMax {
 		return 0, 0, 0, 0, false
