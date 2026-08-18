@@ -29,7 +29,7 @@ Path (user space) → Flatten curves → Transform to device space → Rasterize
 
 Stroke pipeline:
 ```
-Path (user space) → Flatten curves → Expand to outline (caps/joins/dashes) → Transform → Rasterize
+Path (user space) → Flatten curves → Expand to convex pieces (caps/joins/dashes) → Transform → Rasterize
 ```
 
 ### Core Algorithm
@@ -72,13 +72,3 @@ diff (middle), reference (right). In the diff panel green marks under-production
 1. Add case to appropriate file in `testcases/` (fill.go, stroke.go, curve.go, dash.go, precision.go, complex.go, subpath.go, ctm.go, large.go)
 2. Run `go generate` to regenerate references
 3. Run `go test` to verify
-
-## Key Numerical Constants
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| Default flatness | 0.25 | Curve flattening tolerance in device pixels |
-| Default miter limit | 10.0 | PDF/PostScript standard |
-| Zero-length threshold | 1e-10 | Skip degenerate stroke segments |
-| Collinearity threshold | 1e-6 | Detect nearly collinear vectors |
-| Cusp threshold | cos(179.43°) ≈ −0.9999 | Path doubling back on itself |

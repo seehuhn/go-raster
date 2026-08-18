@@ -1069,6 +1069,46 @@ var strokeCases = []TestCase{
 			MiterLimit: 10,
 		},
 	},
+
+	// Narrow folds where the inner offset lines meet beyond the ends of the
+	// adjacent segments.  The stroke must stay within half a line width of
+	// the path.
+	{
+		Name:   "cusp_fold_left_round",
+		Path:   corner(20, 12, 20, 52, 23, 16),
+		Width:  64,
+		Height: 64,
+		Op: Stroke{
+			Width:      8,
+			Cap:        graphics.LineCapRound,
+			Join:       graphics.LineJoinRound,
+			MiterLimit: 10,
+		},
+	},
+	{
+		Name:   "cusp_fold_right_round",
+		Path:   corner(44, 12, 44, 52, 41, 16),
+		Width:  64,
+		Height: 64,
+		Op: Stroke{
+			Width:      8,
+			Cap:        graphics.LineCapRound,
+			Join:       graphics.LineJoinRound,
+			MiterLimit: 10,
+		},
+	},
+	{
+		Name:   "cusp_fold_closed_round",
+		Path:   closedTriangle(32, 50, 34, 14, 36, 50),
+		Width:  64,
+		Height: 64,
+		Op: Stroke{
+			Width:      8,
+			Cap:        graphics.LineCapRound,
+			Join:       graphics.LineJoinRound,
+			MiterLimit: 10,
+		},
+	},
 }
 
 // horizontalLine builds a horizontal line segment.

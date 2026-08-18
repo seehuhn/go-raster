@@ -220,7 +220,11 @@ This section describes how strokes become filled outlines. After expansion, the 
 
 ### 6.1 Overview
 
-Stroke expansion proceeds as follows. First, flatten curves (§5). Second, apply the dash pattern, splitting the path at transitions. Third, offset each segment by ±half_line_width perpendicular to the segment. Fourth, add joins between consecutive segments. Fifth, add caps at endpoints. The result is a closed polygon in user space. The pipeline (§2.4) then transforms it to device space.
+Stroke expansion proceeds as follows. First, flatten curves (§5). Second, apply the dash pattern, splitting the path at transitions. Third, emit one quadrilateral per segment (§6.2), one piece per join (§6.4), and one piece per cap (§6.3). The result is a set of convex polygons in user space. The pipeline (§2.4) then transforms them to device space.
+
+The stroked region is the union of these pieces. Every piece is wound clockwise, so under the nonzero winding rule (§3) overlapping pieces reinforce one another and the union fills uniformly. Winding direction is therefore load-bearing: a piece wound the other way would cancel the pieces it overlaps and leave a hole.
+
+Tracing a single contour around the outline instead does not work. Wherever a stroke covers the same area twice — a tight curve, a self-crossing path, a dash landing on an earlier one — the contour reverses orientation and the winding cancels to zero.
 
 ### 6.2 Line Segment Offsetting
 
@@ -228,47 +232,45 @@ Consider a segment from A to B. If ||B − A|| < δ for a small tolerance δ, th
 
 For other segments, compute the unit tangent T = normalise(B − A), the unit normal N = (−T.y, T.x), and the offset d = line_width / 2.
 
-The left offset segment runs from A + d×N to B + d×N. The right offset segment runs from A − d×N to B − d×N.
+The segment contributes the quadrilateral A + d×N, B + d×N, B − d×N, A − d×N, in that order. This runs up the +N side and back down the −N side, which is clockwise.
 
 ### 6.3 Line Caps
 
-Caps appear at the start and end of open subpaths and at dash endpoints.
+Caps appear at the start and end of open subpaths and at dash endpoints. Each is a separate piece.
 
-Let P be the endpoint, T the outward tangent (away from the path), N the normal, and d = line_width / 2.
+Let P be the endpoint, T the outward tangent (away from the path), N = (−T.y, T.x), and d = line_width / 2.
 
-A butt cap adds no extension. The left point is P + d×N, the right is P − d×N, connected by a straight line.
+A butt cap adds no piece. The segment quadrilateral already ends flush at P.
 
-A square cap extends by d along the tangent. Let P_ext = P + d×T. The left point is P_ext + d×N, the right is P_ext − d×N.
+A square cap adds the quadrilateral P + d×N, P + d×N + d×T, P − d×N + d×T, P − d×N.
 
-A round cap adds a semicircular arc centred at P with radius d, from P + d×N to P − d×N, curving in direction T. Approximate with line segments (§6.6).
+A round cap adds a half-disc: the semicircular arc centred at P with radius d runs from P + d×N clockwise through P + d×T to P − d×N, and the diameter closes it. Approximate the arc with line segments (§6.6).
 
 ### 6.4 Line Joins
 
-Joins appear where consecutive segments meet at point P. Let T1 be the incoming tangent, T2 the outgoing tangent, and d = line_width / 2.
+Joins appear where consecutive segments meet at point P, including at the closing corner of a closed subpath. Each is a separate piece, filling the wedge the two segment quadrilaterals leave open on the outside of the corner.
 
-The turn angle θ comes from the tangent vectors: cos_θ = dot(T1, T2) and sin_θ = cross(T1, T2), where the 2D cross product is T1.x × T2.y − T1.y × T2.x.
+Let T1 be the incoming tangent, T2 the outgoing tangent, and d = line_width / 2. The signed turn angle is θ = atan2(cross(T1, T2), dot(T1, T2)), where the 2D cross product is T1.x × T2.y − T1.y × T2.x. It lies in (−180°, 180°], and is positive for a left turn.
 
-The sign of sin_θ determines the outer side. When sin_θ > 0, −N is outer. When sin_θ < 0, +N is outer.
+Taking θ from atan2 rather than from the sign of the cross product alone keeps the cusp case well defined (§6.8): where the path doubles back the cross product vanishes, but atan2 still yields ±180° and picks out the side the path turns towards.
 
-If |sin_θ| < δ (near-collinear), no join is needed.
+If |θ| < δ the path continues straight, the two quadrilaterals meet flush, and no piece is needed.
 
-For a miter join, extend both outer offset edges until they meet.
+The join lies on the outer side of the corner, away from the turn. Let s = −sign(θ), and let the outer normals be n1 = s × (−T1.y, T1.x) and n2 = s × (−T2.y, T2.x). They span exactly the turn angle. Order them so that the sweep from the first to the second is clockwise: take (n1, n2) for a right turn and (n2, n1) for a left turn, and call the result n_from and n_to.
 
-The miter length is the distance from inner edge to miter tip. Per PDF, miter_length / line_width = 1 / sin(φ/2), where φ is the corner's interior angle. Since θ is the angle between tangents (cos_θ = T1·T2), we have φ = 180° − θ and sin(φ/2) = cos(θ/2).
+A bevel join adds the triangle P, P + d×n_from, P + d×n_to.
 
-The half-angle identity gives cos(θ/2) = sqrt((1 + cos_θ) / 2). Define half_angle = sqrt((1 + cos_θ) / 2), so miter_length = line_width / half_angle.
+A round join adds the circular sector P, then the arc of radius d from P + d×n_from clockwise to P + d×n_to. Approximate the arc with segments (§6.6).
+
+A miter join adds the quadrilateral P, P + d×n_from, tip, P + d×n_to, where the tip is P + normalise(n1 + n2) × (d / half_angle).
+
+The miter length is the distance from inner edge to miter tip. Per PDF, miter_length / line_width = 1 / sin(φ/2), where φ is the corner's interior angle. Since |θ| is the angle between tangents, φ = 180° − |θ| and sin(φ/2) = cos(θ/2).
+
+The half-angle identity gives cos(θ/2) = sqrt((1 + dot(T1, T2)) / 2). Define half_angle = sqrt((1 + dot(T1, T2)) / 2), so miter_length = line_width / half_angle.
 
 If 1 / half_angle exceeds the miter_limit, use a bevel instead.
 
-Otherwise, compute the miter point. Let N1 and N2 be the segment normals. The bisector is normalise(N1 + N2), pointing toward +N.
-
-When +N is outer (sin_θ < 0), outer_point = P + bisector × (d / half_angle) and inner_point = P − bisector × (d / half_angle). When −N is outer (sin_θ > 0), negate these.
-
-On the inner side, the offset edges converge and intersect before reaching P. Use this intersection point to connect the inner edges, avoiding self-intersection.
-
-For a bevel join, connect the outer offset endpoints with a straight line. Compute the inner intersection as above.
-
-For a round join, add a circular arc on the outer side connecting the offset endpoints. Compute the inner intersection as above. Approximate the arc with segments (§6.6).
+The inner side of the corner needs nothing. There the two segment quadrilaterals overlap, and the nonzero winding rule paints the overlap once (§6.10).
 
 ### 6.5 Miter Limit
 
@@ -314,19 +316,19 @@ If a corner falls within an on-segment, paint it with the join style. If within 
 
 Arc length along a segment from A to B is ||B − A||. Summing segment lengths gives cumulative arc length. Since dashing follows flattening, this measures length along the polygonal approximation, closely matching true arc length (error is O(ε²)).
 
-### 6.8 Cusp Handling
+### 6.8 Cusps
 
-When a path doubles back (tangents nearly opposite), a cusp occurs.
+A cusp occurs where a path doubles back on itself, making the turn angle 180° and laying the two segment quadrilaterals on top of each other.
 
-Detect a cusp when cos_θ = dot(T1, T2) < −0.9999, indicating a near-180° turn.
+No special case is needed. The join piece (§6.4) is a half-disc for a round join and degenerate for a bevel, and the miter length is unbounded, so a miter always falls back to the bevel.
 
-At a cusp, add caps on both segments (as if each ended at P) rather than a join. This prevents self-intersection.
+A cusp does require the turn angle to come from atan2 (§6.4). The cross product of the tangents vanishes there, so its sign alone would leave the outer side of the corner undetermined.
 
 ### 6.9 Zero-Length Subpaths
 
 A zero-length subpath is a single point with no segments (moveto followed by closepath, or lineto to the same point).
 
-Round caps draw a filled circle with radius half the line width.
+Round caps draw a filled circle with radius half the line width. Being built from a point rather than a tangent, the circle has no inherited orientation; it must be wound clockwise like every other piece (§6.1), or it will cancel whatever it overlaps.
 
 Butt and square caps draw nothing, since the tangent is undefined.
 
@@ -334,9 +336,9 @@ A zero-length on-segment in a dash pattern differs: it inherits a tangent from t
 
 ### 6.10 Stroke Self-Intersection
 
-Thick lines along tight curves may self-intersect when opposite offset curves cross.
+Thick lines along tight curves, self-crossing paths, and dashes landing on top of one another all make a stroke cover the same area more than once.
 
-Rasterise the outline as-is. Stroke outlines always use nonzero winding, regardless of the fill_rule setting. Overlapping regions receive winding ±2 or higher, clamping to full coverage. The entire stroke interior fills uniformly.
+Rasterise the pieces as they are. Stroke outlines always use nonzero winding, regardless of the fill_rule setting. Since every piece winds the same way (§6.1), overlapping regions receive a winding number of magnitude 2 or higher, clamping to full coverage. The entire stroke interior fills uniformly.
 
 Computing the union of self-intersecting regions adds complexity without improving output.
 

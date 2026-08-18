@@ -68,7 +68,7 @@ func TestArcSegmentCap(t *testing.T) {
 	r.Width = 1
 
 	r.stroke = r.stroke[:0]
-	r.addArc(vec.Vec2{X: 0, Y: 0}, 1, vec.Vec2{X: 1, Y: 0}, 2*math.Pi, true)
+	r.addArc(vec.Vec2{X: 0, Y: 0}, 1, vec.Vec2{X: 1, Y: 0}, 2*math.Pi)
 	if len(r.stroke) > maxFlattenSegments+1 {
 		t.Errorf("arc generated %d vertices, want <= %d", len(r.stroke), maxFlattenSegments+1)
 	}

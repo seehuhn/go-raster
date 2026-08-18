@@ -29,6 +29,7 @@ type strokeSegment struct {
 	A, B vec.Vec2 // endpoints in user space
 	T    vec.Vec2 // unit tangent (A→B direction)
 	N    vec.Vec2 // unit normal (90° CCW from T)
+	Len  float64  // distance from A to B
 }
 
 // Stroke renders the path as a stroked outline using Width, Cap, Join,
@@ -57,9 +58,10 @@ func (r *Rasterizer) Stroke(p path.Path, emit func(y, xMin int, coverage []float
 	// Handle degenerate subpaths (no orientation): only round cap produces circle
 	if r.Cap == graphics.LineCapRound {
 		for _, pt := range r.degeneratePoints {
-			startOffset := len(r.stroke)
-			r.addArc(pt, r.Width/2, vec.Vec2{X: 1, Y: 0}, 2*math.Pi, true)
-			r.strokeOffsets = append(r.strokeOffsets, startOffset)
+			start := r.beginPiece()
+			// negative sweep, so the circle winds clockwise like every other piece
+			r.addArc(pt, r.Width/2, vec.Vec2{X: 1, Y: 0}, -2*math.Pi)
+			r.endPiece(start)
 		}
 	}
 
@@ -78,17 +80,7 @@ func (r *Rasterizer) Stroke(p path.Path, emit func(y, xMin int, coverage []float
 func (r *Rasterizer) strokeAllSubpaths() {
 	numSubpaths := len(r.segsOffsets)
 	for i := range numSubpaths {
-		segs := r.getSubpathSegments(i)
-		closed := r.subpathClosed[i]
-
-		startOffset := len(r.stroke)
-		r.strokeSubpath(segs, closed)
-		if len(r.stroke)-startOffset >= 3 {
-			r.strokeOffsets = append(r.strokeOffsets, startOffset)
-		} else {
-			// Degenerate polygon, discard by resetting to start
-			r.stroke = r.stroke[:startOffset]
-		}
+		r.strokeSubpath(r.getSubpathSegments(i), r.subpathClosed[i])
 	}
 }
 
@@ -116,27 +108,20 @@ func (r *Rasterizer) strokeDashedSubpaths() {
 		// Handle dash-created zero-length segments (have orientation from underlying path)
 		if len(segs) == 1 && segs[0].A == segs[0].B {
 			seg := &segs[0]
-			startOffset := len(r.stroke)
+			start := r.beginPiece()
 			switch r.Cap {
 			case graphics.LineCapRound:
-				r.addArc(seg.A, r.Width/2, vec.Vec2{X: 1, Y: 0}, 2*math.Pi, true)
-				r.strokeOffsets = append(r.strokeOffsets, startOffset)
+				// negative sweep, so the circle winds clockwise like every other piece
+				r.addArc(seg.A, r.Width/2, vec.Vec2{X: 1, Y: 0}, -2*math.Pi)
 			case graphics.LineCapSquare:
 				r.addSquare(seg.A, seg.T, r.Width/2)
-				r.strokeOffsets = append(r.strokeOffsets, startOffset)
 			}
 			// Butt cap: no output
+			r.endPiece(start)
 			continue
 		}
 
-		startOffset := len(r.stroke)
 		r.strokeSubpath(segs, false) // dashed subpaths are never closed
-		if len(r.stroke)-startOffset >= 3 {
-			r.strokeOffsets = append(r.strokeOffsets, startOffset)
-		} else {
-			// Degenerate polygon, discard by resetting to start
-			r.stroke = r.stroke[:startOffset]
-		}
 	}
 }
 
@@ -256,349 +241,164 @@ func (r *Rasterizer) addStrokeSegment(a, b vec.Vec2) {
 	}
 	t := d.Mul(1 / length)         // unit tangent
 	n := vec.Vec2{X: -t.Y, Y: t.X} // unit normal (90° CCW)
-	r.segs = append(r.segs, strokeSegment{A: a, B: b, T: t, N: n})
+	r.segs = append(r.segs, strokeSegment{A: a, B: b, T: t, N: n, Len: length})
+}
+
+// beginPiece returns the index at which the next piece of the stroke outline
+// starts.
+func (r *Rasterizer) beginPiece() int {
+	return len(r.stroke)
+}
+
+// endPiece records the points added since start as one piece of the stroke
+// outline, dropping pieces with too few points to cover any area.
+//
+// Every piece must wind clockwise.  Pieces of the same stroke overlap freely,
+// and only pieces which agree on their winding direction reinforce each other
+// under the nonzero winding rule; a piece wound the other way would cancel the
+// pieces it overlaps and leave a hole.
+func (r *Rasterizer) endPiece(start int) {
+	if len(r.stroke)-start >= 3 {
+		r.strokeOffsets = append(r.strokeOffsets, start)
+	} else {
+		r.stroke = r.stroke[:start]
+	}
 }
 
 // strokeSubpath builds the stroke outline for a single subpath into r.stroke.
-// The stroke outline is built as a closed polygon: forward pass on the +N side,
-// then backward pass on the -N side. Join geometry is added on the outer side
-// of each corner, which depends on the turn direction.
+//
+// The outline is emitted as a union of convex pieces: one quadrilateral per
+// segment, plus one piece per join and per cap.  Every piece winds the same
+// way, so the nonzero winding rule fills exactly their union, however much the
+// stroke overlaps itself.  A single contour tracing the outline cannot do this:
+// where the stroke covers the same area twice the contour reverses orientation
+// and the winding cancels to zero, leaving holes.
+//
 // Zero-length subpaths are handled by the caller before invoking this method.
 func (r *Rasterizer) strokeSubpath(segs []strokeSegment, closed bool) {
-	if len(segs) == 0 {
-		return // empty, nothing to do
+	n := len(segs)
+	if n == 0 {
+		return
 	}
 
-	d := r.Width / 2 // half-width
+	d := r.Width / 2
 
-	if closed {
-		// Closed path: no caps, just joins
-		// Build one continuous polygon: +N side forward, then -N side backward
-		// The closing corner needs special handling to connect the two sides.
+	// one quadrilateral per segment
+	for i := range segs {
+		seg := &segs[i]
+		off := seg.N.Mul(d)
+		start := r.beginPiece()
+		r.stroke = append(r.stroke,
+			seg.A.Add(off), seg.B.Add(off), seg.B.Sub(off), seg.A.Sub(off))
+		r.endPiece(start)
+	}
 
-		first := &segs[0]
-		last := &segs[len(segs)-1]
-
-		// Forward pass: +N side (right side of path direction)
-		// Start with the closing corner's +N point from segment 0's perspective
-		sinThetaClose := last.T.X*first.T.Y - last.T.Y*first.T.X
-		r.stroke = append(r.stroke, first.A.Add(first.N.Mul(d)))
-		for i := range len(segs) {
-			seg := &segs[i]
-			if i < len(segs)-1 {
-				next := &segs[i+1]
-				sinTheta := seg.T.X*next.T.Y - seg.T.Y*next.T.X
-				if math.Abs(sinTheta) < collinearityThreshold {
-					// Nearly collinear: just add offset points
-					r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
-					r.stroke = append(r.stroke, next.A.Add(next.N.Mul(d)))
-				} else if sinTheta > 0 {
-					// Right turn: +N is inner side
-					r.addInnerIntersectionOrOffsets(seg.B, seg.T, next.T, seg.N, next.N, d, true)
-				} else {
-					// Left turn: +N is outer side
-					r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
-					r.addJoin(seg.B, seg.T, next.T, d, true)
-					r.stroke = append(r.stroke, next.A.Add(next.N.Mul(d)))
-				}
-			} else {
-				// Last segment: handle closing corner
-				if math.Abs(sinThetaClose) < collinearityThreshold {
-					// Nearly collinear: add both offset points
-					r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
-					r.stroke = append(r.stroke, first.A.Add(first.N.Mul(d)))
-				} else if sinThetaClose > 0 {
-					// Right turn: +N is inner side - intersection replaces seg.B and first.A
-					r.addInnerIntersectionOrOffsets(seg.B, seg.T, first.T, seg.N, first.N, d, true)
-				} else {
-					// Left turn: +N is outer side
-					r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
-					r.addJoin(seg.B, seg.T, first.T, d, true)
-					r.stroke = append(r.stroke, first.A.Add(first.N.Mul(d)))
-				}
-			}
+	// one piece per join
+	for i := range segs {
+		if i == 0 && !closed {
+			continue // an open subpath has no join before its first segment
 		}
+		prev := &segs[(i+n-1)%n]
+		r.addJoinPiece(segs[i].A, prev.T, segs[i].T, d)
+	}
 
-		// Backward pass: -N side (left side of path direction)
-		// Handle closing corner first, then iterate backwards through segments
-		if math.Abs(sinThetaClose) < collinearityThreshold {
-			// Nearly collinear: add both offset points
-			r.stroke = append(r.stroke, first.A.Sub(first.N.Mul(d)))
-			r.stroke = append(r.stroke, last.B.Sub(last.N.Mul(d)))
-		} else if sinThetaClose > 0 {
-			// Right turn: -N is outer side
-			r.stroke = append(r.stroke, first.A.Sub(first.N.Mul(d)))
-			r.addJoin(first.A, last.T, first.T, d, false)
-			r.stroke = append(r.stroke, last.B.Sub(last.N.Mul(d)))
-		} else {
-			// Left turn: -N is inner side - intersection replaces first.A and last.B
-			r.addInnerIntersectionOrOffsets(first.A, last.T, first.T, last.N, first.N, d, false)
-		}
-
-		for i := len(segs) - 1; i >= 0; i-- {
-			seg := &segs[i]
-			// Add join at this segment's A point (corner with previous segment)
-			if i > 0 {
-				prev := &segs[i-1]
-				sinTheta := prev.T.X*seg.T.Y - prev.T.Y*seg.T.X
-				if math.Abs(sinTheta) < collinearityThreshold {
-					// Nearly collinear: just add offset points
-					r.stroke = append(r.stroke, seg.A.Sub(seg.N.Mul(d)))
-					r.stroke = append(r.stroke, prev.B.Sub(prev.N.Mul(d)))
-				} else if sinTheta > 0 {
-					// Right turn: -N is outer side
-					r.stroke = append(r.stroke, seg.A.Sub(seg.N.Mul(d)))
-					r.addJoin(seg.A, prev.T, seg.T, d, false)
-					r.stroke = append(r.stroke, prev.B.Sub(prev.N.Mul(d)))
-				} else {
-					// Left turn: -N is inner side
-					r.addInnerIntersectionOrOffsets(seg.A, prev.T, seg.T, prev.N, seg.N, d, false)
-				}
-			} else {
-				// First segment (i=0): add closing point of polygon
-				r.stroke = append(r.stroke, seg.A.Sub(seg.N.Mul(d)))
-			}
-		}
-
-	} else {
-		// Open path: caps at ends, joins in between
-		first := &segs[0]
-		last := &segs[len(segs)-1]
-
-		// Start cap (at first.A, direction = -T)
-		r.addCap(first.A, first.T.Mul(-1), d)
-
-		// Forward pass: +N side (right side of path direction)
-		skipNextA := false
-		for i := range len(segs) {
-			seg := &segs[i]
-			if !skipNextA {
-				r.stroke = append(r.stroke, seg.A.Add(seg.N.Mul(d)))
-			}
-			skipNextA = false
-			if i < len(segs)-1 {
-				next := &segs[i+1]
-				sinTheta := seg.T.X*next.T.Y - seg.T.Y*next.T.X
-				if math.Abs(sinTheta) < collinearityThreshold {
-					// Nearly collinear: just add offset points
-					r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
-				} else if sinTheta > 0 {
-					// Right turn: +N is inner side
-					skipNextA = r.addInnerIntersectionOrOffsets(seg.B, seg.T, next.T, seg.N, next.N, d, true)
-				} else {
-					// Left turn: +N is outer side
-					r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
-					r.addJoin(seg.B, seg.T, next.T, d, true)
-				}
-			} else {
-				r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
-			}
-		}
-
-		// End cap (at last.B, direction = T)
-		r.addCap(last.B, last.T, d)
-
-		// Backward pass: -N side (left side of path direction)
-		skipNextB := false
-		for i := len(segs) - 1; i >= 0; i-- {
-			seg := &segs[i]
-			if !skipNextB {
-				r.stroke = append(r.stroke, seg.B.Sub(seg.N.Mul(d)))
-			}
-			skipNextB = false
-			// Add join at this segment's A point (corner with previous segment)
-			if i > 0 {
-				prev := &segs[i-1]
-				sinTheta := prev.T.X*seg.T.Y - prev.T.Y*seg.T.X
-				if math.Abs(sinTheta) < collinearityThreshold {
-					// Nearly collinear: just add offset points
-					r.stroke = append(r.stroke, seg.A.Sub(seg.N.Mul(d)))
-				} else if sinTheta > 0 {
-					// Right turn: -N is outer side
-					r.stroke = append(r.stroke, seg.A.Sub(seg.N.Mul(d)))
-					r.addJoin(seg.A, prev.T, seg.T, d, false)
-				} else {
-					// Left turn: -N is inner side
-					skipNextB = r.addInnerIntersectionOrOffsets(seg.A, prev.T, seg.T, prev.N, seg.N, d, false)
-				}
-			} else {
-				r.stroke = append(r.stroke, seg.A.Sub(seg.N.Mul(d)))
-			}
-		}
+	// caps at both ends of an open subpath
+	if !closed {
+		r.addCapPiece(segs[0].A, segs[0].T.Mul(-1), d)
+		r.addCapPiece(segs[n-1].B, segs[n-1].T, d)
 	}
 }
 
-// addCap adds a line cap to the stroke outline at point P.
-// T is the outward tangent direction (away from the line).
-// d is half the stroke width.
-func (r *Rasterizer) addCap(P, T vec.Vec2, d float64) {
+// addJoinPiece adds the join at P as a separate piece of the stroke outline.
+// T1 and T2 are the tangents of the incoming and outgoing segment, d is half
+// the stroke width.
+func (r *Rasterizer) addJoinPiece(P, T1, T2 vec.Vec2, d float64) {
+	cosTheta := max(-1, min(1, T1.Dot(T2)))
+	sinTheta := T1.X*T2.Y - T1.Y*T2.X
+
+	// The signed turn angle, in (-pi, pi].  Taking it from Atan2 rather than
+	// from the sign of sinTheta alone keeps a cusp well defined: there sinTheta
+	// is zero, but Atan2 still yields +/-pi and picks out the side the path
+	// doubles back towards.
+	turn := math.Atan2(sinTheta, cosTheta)
+
+	// Where the path continues straight the two quadrilaterals meet flush and
+	// there is no wedge to fill.  The bound is numerical, not a quality
+	// tolerance: no point of the omitted sector lies further than d*sin(turn/2)
+	// from one of the two quadrilaterals, and at this angle that is under 1e-6
+	// times the line width, whatever the width and the CTM.
+	if math.Abs(turn) < collinearityThreshold {
+		return
+	}
+
+	// The join sits on the outer side of the corner, away from the turn, and
+	// the outer normals span exactly the turn angle.
+	outer := -math.Copysign(1, turn)
+	n1 := vec.Vec2{X: -T1.Y, Y: T1.X}.Mul(outer)
+	n2 := vec.Vec2{X: -T2.Y, Y: T2.X}.Mul(outer)
+
+	// Every piece must wind the same way as the segment quadrilaterals, which
+	// run clockwise, so sweep from whichever normal leaves a clockwise arc.
+	from, to, sweep := n1, n2, turn
+	if sweep > 0 {
+		from, to, sweep = n2, n1, -turn
+	}
+
+	switch r.Join {
+	case graphics.LineJoinMiter:
+		// miterLength = 1/sin(φ/2), where φ = 180° - θ is the interior angle at
+		// the corner, so sin(φ/2) = cos(θ/2) = sqrt((1 + cosθ)/2).
+		sinHalf := math.Sqrt((1 + cosTheta) / 2)
+		const miterEpsilon = 1e-10
+		if sinHalf > 0 && 1/sinHalf <= r.MiterLimit+miterEpsilon {
+			bisector := n1.Add(n2)
+			if bisectorLen := bisector.Length(); bisectorLen > zeroLengthThreshold {
+				tip := P.Add(bisector.Mul(d / (sinHalf * bisectorLen)))
+				start := r.beginPiece()
+				r.stroke = append(r.stroke, P, P.Add(from.Mul(d)), tip, P.Add(to.Mul(d)))
+				r.endPiece(start)
+				return
+			}
+		}
+		// miter limit exceeded, fall back to a bevel
+		fallthrough
+
+	case graphics.LineJoinBevel:
+		start := r.beginPiece()
+		r.stroke = append(r.stroke, P, P.Add(from.Mul(d)), P.Add(to.Mul(d)))
+		r.endPiece(start)
+
+	case graphics.LineJoinRound:
+		start := r.beginPiece()
+		r.stroke = append(r.stroke, P)
+		r.addArc(P, d, from, sweep)
+		r.endPiece(start)
+	}
+}
+
+// addCapPiece adds the cap at P as a separate piece of the stroke outline.
+// T is the outward tangent, pointing away from the line, and d is half the
+// stroke width.
+func (r *Rasterizer) addCapPiece(P, T vec.Vec2, d float64) {
 	N := vec.Vec2{X: -T.Y, Y: T.X} // normal (90° CCW from T)
 
 	switch r.Cap {
 	case graphics.LineCapButt:
-		// Butt cap: just connect left and right offset points (already done by caller)
-		// No additional points needed
+		// nothing to add: the segment quadrilateral already ends flush
 
 	case graphics.LineCapSquare:
-		// Square cap: extend by d along tangent
-		ext := P.Add(T.Mul(d))
-		left := ext.Add(N.Mul(d))
-		right := ext.Sub(N.Mul(d))
-		r.stroke = append(r.stroke, left, right)
+		ext := T.Mul(d)
+		start := r.beginPiece()
+		r.stroke = append(r.stroke,
+			P.Add(N.Mul(d)), P.Add(N.Mul(d)).Add(ext),
+			P.Sub(N.Mul(d)).Add(ext), P.Sub(N.Mul(d)))
+		r.endPiece(start)
 
 	case graphics.LineCapRound:
-		// Round cap: semicircular arc curving outward (through T direction)
-		// Arc starts at N direction and sweeps CW (negative angle) to reach -N,
-		// passing through T (the outward direction)
-		// includeStart=true because cap's start point is not yet in the polygon
-		r.addArc(P, d, N, -math.Pi, true)
-	}
-}
-
-// computeInnerIntersection returns the intersection point of the two inner
-// offset lines at a corner. Returns the point and ok=true if valid.
-// For nearly collinear segments, returns ok=false.
-func computeInnerIntersection(P, T1, T2 vec.Vec2, d float64, isPositiveNormalSide bool) (vec.Vec2, bool) {
-	cosTheta := T1.Dot(T2)
-
-	// Nearly collinear - no meaningful intersection
-	if cosTheta > 1-1e-9 {
-		return vec.Vec2{}, false
-	}
-
-	// half_angle = cos(θ/2) = sqrt((1 + cos_θ) / 2)
-	halfAngle := math.Sqrt((1 + cosTheta) / 2)
-	if halfAngle < 1e-9 {
-		return vec.Vec2{}, false
-	}
-
-	N1 := vec.Vec2{X: -T1.Y, Y: T1.X}
-	N2 := vec.Vec2{X: -T2.Y, Y: T2.X}
-
-	// Inner direction: for +N inner, use N1+N2; for -N inner, use -(N1+N2)
-	innerDir := N1.Add(N2)
-	if !isPositiveNormalSide {
-		innerDir = innerDir.Mul(-1) // -N side inner → negate
-	}
-
-	innerDirLen := innerDir.Length()
-	if innerDirLen < 1e-9 {
-		return vec.Vec2{}, false
-	}
-	innerDir = innerDir.Mul(1 / innerDirLen)
-
-	return P.Add(innerDir.Mul(d / halfAngle)), true
-}
-
-// addInnerIntersectionOrOffsets handles the inner side of a corner.
-// If we can compute an intersection, adds just that point.
-// Otherwise adds both offset points (fallback to current behavior).
-// Returns true if intersection was used (next.A offset should be skipped).
-func (r *Rasterizer) addInnerIntersectionOrOffsets(P, T1, T2, N1, N2 vec.Vec2, d float64, isPositiveNormalSide bool) bool {
-	if innerPt, ok := computeInnerIntersection(P, T1, T2, d, isPositiveNormalSide); ok {
-		r.stroke = append(r.stroke, innerPt)
-		return true // skip next.A offset
-	}
-	// Fallback: add both offset points
-	if isPositiveNormalSide {
-		r.stroke = append(r.stroke, P.Add(N1.Mul(d)))
-		r.stroke = append(r.stroke, P.Add(N2.Mul(d)))
-	} else {
-		r.stroke = append(r.stroke, P.Sub(N1.Mul(d)))
-		r.stroke = append(r.stroke, P.Sub(N2.Mul(d)))
-	}
-	return false
-}
-
-// addJoin adds a line join at point P where tangent changes from T1 to T2.
-// d is half the stroke width.
-// isPositiveNormalSide indicates which side of the stroke we're building.
-func (r *Rasterizer) addJoin(P, T1, T2 vec.Vec2, d float64, isPositiveNormalSide bool) {
-	// Compute angle between tangents
-	cosTheta := T1.Dot(T2)
-	sinTheta := T1.X*T2.Y - T1.Y*T2.X // cross product Z component
-
-	// Skip if nearly collinear
-	if sinTheta > -collinearityThreshold && sinTheta < collinearityThreshold {
-		return
-	}
-
-	// Check for cusp (path doubling back on itself)
-	if cosTheta < cuspCosineThreshold {
-		// Emit two caps instead of a join
-		r.addCap(P, T1, d)
-		r.addCap(P, T2.Mul(-1), d)
-		return
-	}
-
-	// The join geometry extends in the direction of the current side we're building.
-	// isPositiveNormalSide tells us which side: +N (true) or -N (false).
-
-	switch r.Join {
-	case graphics.LineJoinMiter:
-		// Check miter limit: miterLength = 1 / sin(φ/2)
-		// where φ is the visual angle at the corner (interior angle of the stroke).
-		// If θ is the angle between tangents (cosTheta = T1·T2), then φ = 180° - θ.
-		// sin(φ/2) = sin(90° − θ/2) = cos(θ/2) = sqrt((1 + cosθ) / 2)
-		sinHalf := math.Sqrt((1 + cosTheta) / 2)
-		// Use small tolerance for boundary cases (floating-point precision)
-		const miterEpsilon = 1e-10
-		if sinHalf > 0 && 1/sinHalf <= r.MiterLimit+miterEpsilon {
-			// Miter join: compute miter point
-			// The miter point is where the two offset lines intersect
-			// Distance from P to miter point = d / sin(φ/2) = d / sinHalf
-			N1 := vec.Vec2{X: -T1.Y, Y: T1.X}
-			N2 := vec.Vec2{X: -T2.Y, Y: T2.X}
-
-			// Bisector direction depends on which side we're building
-			var bisector vec.Vec2
-			if isPositiveNormalSide {
-				bisector = N1.Add(N2) // +N side
-			} else {
-				bisector = N1.Add(N2).Mul(-1) // -N side
-			}
-			bisectorLen := bisector.Length()
-			if bisectorLen > zeroLengthThreshold {
-				bisector = bisector.Mul(1 / bisectorLen)
-				// Distance to miter point = d / sinHalf
-				miterDist := d / sinHalf
-				miterPt := P.Add(bisector.Mul(miterDist))
-				r.stroke = append(r.stroke, miterPt)
-			}
-			return
-		}
-		// Fall through to bevel if miter limit exceeded
-		fallthrough
-
-	case graphics.LineJoinBevel:
-		// Bevel join: just let the two offset lines meet (no additional points)
-		// The caller already adds the necessary points
-		return
-
-	case graphics.LineJoinRound:
-		// Round join: arc curving outward on the current side
-		// includeStart=false because join's start point is already in the polygon
-		angle := math.Acos(max(-1, min(1, cosTheta)))
-		if isPositiveNormalSide {
-			// Forward pass: arc from +N of T1 to +N of T2
-			N1 := vec.Vec2{X: -T1.Y, Y: T1.X} // +N direction of T1
-			// For +N side: right turn needs CCW arc, left turn needs CW arc
-			if sinTheta > 0 {
-				r.addArc(P, d, N1, angle, false)
-			} else {
-				r.addArc(P, d, N1, -angle, false)
-			}
-		} else {
-			// Backward pass: we just added offset using T2's normal, so arc must
-			// start from -N of T2 and go to -N of T1 (reversed direction)
-			N2 := vec.Vec2{X: T2.Y, Y: -T2.X} // -N direction of T2
-			// Sweep direction is reversed from forward pass
-			if sinTheta > 0 {
-				r.addArc(P, d, N2, -angle, false)
-			} else {
-				r.addArc(P, d, N2, angle, false)
-			}
-		}
+		// semicircle from +N clockwise through T to -N
+		start := r.beginPiece()
+		r.addArc(P, d, N, -math.Pi)
+		r.endPiece(start)
 	}
 }
 
@@ -606,8 +406,7 @@ func (r *Rasterizer) addJoin(P, T1, T2 vec.Vec2, d float64, isPositiveNormalSide
 // center is the arc center, radius is the arc radius.
 // startDir is the unit vector from center to arc start.
 // sweep is the sweep angle in radians (positive = CCW).
-// includeStart indicates whether to include the start point (false if caller already added it).
-func (r *Rasterizer) addArc(center vec.Vec2, radius float64, startDir vec.Vec2, sweep float64, includeStart bool) {
+func (r *Rasterizer) addArc(center vec.Vec2, radius float64, startDir vec.Vec2, sweep float64) {
 	// Compute number of segments based on flatness tolerance
 	// Using device-space radius for segment count
 	devRadius := r.transformLinear(vec.Vec2{X: radius, Y: 0}).Length()
@@ -615,10 +414,8 @@ func (r *Rasterizer) addArc(center vec.Vec2, radius float64, startDir vec.Vec2, 
 	devRadius = max(devRadius, devRadius2)
 
 	if devRadius < r.Flatness {
-		// Arc too small to matter - just add end point (and start if needed)
-		if includeStart {
-			r.stroke = append(r.stroke, center.Add(startDir.Mul(radius)))
-		}
+		// arc too small to matter, just add its endpoints
+		r.stroke = append(r.stroke, center.Add(startDir.Mul(radius)))
 		cos, sin := math.Cos(sweep), math.Sin(sweep)
 		endDir := vec.Vec2{
 			X: startDir.X*cos - startDir.Y*sin,
@@ -644,11 +441,7 @@ func (r *Rasterizer) addArc(center vec.Vec2, radius float64, startDir vec.Vec2, 
 
 	// Generate arc points
 	dt := sweep / float64(n)
-	startI := 0
-	if !includeStart {
-		startI = 1 // skip start point if caller already added it
-	}
-	for i := startI; i <= n; i++ {
+	for i := 0; i <= n; i++ {
 		angle := float64(i) * dt
 		// Rotate startDir by angle
 		cos, sin := math.Cos(angle), math.Sin(angle)
@@ -767,7 +560,7 @@ func (r *Rasterizer) applyDashPattern() {
 
 		for segIdx < len(segments) {
 			seg := segments[segIdx]
-			segLen := seg.B.Sub(seg.A).Length()
+			segLen := seg.Len
 			segRemaining := segLen - segDist
 
 			if remaining >= segRemaining {
@@ -780,6 +573,7 @@ func (r *Rasterizer) applyDashPattern() {
 						r.dashedSegs = append(r.dashedSegs, strokeSegment{
 							A: startPt, B: seg.B,
 							T: seg.T, N: seg.N,
+							Len: segRemaining,
 						})
 					} else {
 						r.dashedSegs = append(r.dashedSegs, seg)
@@ -806,6 +600,7 @@ func (r *Rasterizer) applyDashPattern() {
 						r.dashedSegs = append(r.dashedSegs, strokeSegment{
 							A: startPt, B: splitPt,
 							T: tVec, N: nVec,
+							Len: dLen,
 						})
 					} else if len(r.dashedSegs) == dashStartIdx {
 						// Zero-length dash: emit point with tangent from underlying segment

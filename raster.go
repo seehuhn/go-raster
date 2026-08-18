@@ -791,13 +791,9 @@ const (
 	// Segments shorter than this are skipped.
 	zeroLengthThreshold = 1e-10
 
-	// collinearityThreshold is used to detect nearly collinear segments
-	// where no join is needed.
+	// collinearityThreshold is the turn angle below which segments count as
+	// collinear and no join is needed.
 	collinearityThreshold = 1e-6
-
-	// cuspCosineThreshold is the cosine threshold for detecting cusps
-	// (path doubling back on itself). cos(179.43°) ≈ -0.9999
-	cuspCosineThreshold = -0.9999
 
 	// maxFlattenSegments bounds the number of line segments a single curve or
 	// arc is flattened into. A curve never needs more segments than there are
