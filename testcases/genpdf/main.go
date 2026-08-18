@@ -19,6 +19,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"maps"
 	"os"
@@ -54,6 +55,10 @@ func main() {
 			}
 
 			if err := renderPNG(pdfPath, pngPath); err != nil {
+				panic(fmt.Errorf("%s: %w", name, err))
+			}
+
+			if err := stripPNGMetadata(pngPath); err != nil {
 				panic(fmt.Errorf("%s: %w", name, err))
 			}
 		}
@@ -147,4 +152,58 @@ func renderPNG(pdfPath, pngPath string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// strippedChunks lists the PNG chunk types removed from reference images.
+// None of them affect the pixel values that image/png decodes, but all are
+// written by Ghostscript and would make regenerated references differ
+// byte-wise even when the pixels are unchanged: the text chunks (tEXt,
+// zTXt, iTXt) carry the Ghostscript version, tIME the generation time, and
+// iCCP the bundled colour profile, which a Ghostscript upgrade may replace
+// (2.3 kB in every file, roughly 95% of the total).  pHYs merely echoes the
+// -r72 rendering resolution; the tests compare pixels, so it goes too.
+var strippedChunks = map[string]bool{
+	"tEXt": true,
+	"zTXt": true,
+	"iTXt": true,
+	"tIME": true,
+	"iCCP": true,
+	"pHYs": true,
+}
+
+// stripPNGMetadata removes the chunks listed in strippedChunks from a PNG
+// file.  The file is left untouched if it contains none of them.
+func stripPNGMetadata(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	const signature = "\x89PNG\r\n\x1a\n"
+	if len(data) < len(signature) || string(data[:len(signature)]) != signature {
+		return fmt.Errorf("%s: not a PNG file", path)
+	}
+
+	out := make([]byte, 0, len(data))
+	out = append(out, data[:len(signature)]...)
+	pos := len(signature)
+	for pos < len(data) {
+		if pos+8 > len(data) {
+			return fmt.Errorf("%s: truncated PNG chunk", path)
+		}
+		length := int(binary.BigEndian.Uint32(data[pos : pos+4]))
+		end := pos + 12 + length
+		if end < pos || end > len(data) {
+			return fmt.Errorf("%s: truncated PNG chunk", path)
+		}
+		if !strippedChunks[string(data[pos+4:pos+8])] {
+			out = append(out, data[pos:end]...)
+		}
+		pos = end
+	}
+
+	if len(out) == len(data) {
+		return nil
+	}
+	return os.WriteFile(path, out, 0666)
 }
