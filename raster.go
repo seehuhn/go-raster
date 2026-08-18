@@ -17,7 +17,6 @@
 package raster
 
 import (
-	"cmp"
 	"math"
 	"slices"
 
@@ -33,6 +32,7 @@ type edge struct {
 	x0, y0 float64 // start point
 	x1, y1 float64 // end point
 	dxdy   float64 // (x1-x0)/(y1-y0), precomputed for x-intercept calculation
+	ymin   float64 // min(y0, y1), precomputed for scanline bucketing
 }
 
 // Rasterizer converts vector paths to pixel coverage values—the fraction of
@@ -86,6 +86,8 @@ type Rasterizer struct {
 	area          []float32  // coverage accumulation: area within pixel
 	edges         []edge     // edge list for current path (device coordinates)
 	activeIdx     []int      // indices of active edges
+	bucketHead    []int32    // per-scanline chain heads (edge index or -1)
+	bucketNext    []int32    // next edge in the same scanline bucket
 	rowHasEdges   []bool     // per-scanline flag: true if any edge contributes
 	stroke        []vec.Vec2 // stroke outline vertices (all subpaths contiguous)
 	strokeOffsets []int      // start index of each stroke polygon in stroke[]
@@ -347,6 +349,7 @@ func (r *Rasterizer) addEdge(p0, p1 vec.Vec2) {
 		x0: dx0, y0: dy0,
 		x1: dx1, y1: dy1,
 		dxdy: dxdy,
+		ymin: min(dy0, dy1),
 	})
 
 	// Update bounding box
@@ -667,16 +670,24 @@ func (r *Rasterizer) fillLargePath(xMin, xMax, yMin, yMax int, rule fillRule, em
 	r.cover = slices.Grow(r.cover[:0], width)[:width]
 	r.area = slices.Grow(r.area[:0], width)[:width]
 
-	// Sort edges by y_min
-	slices.SortFunc(r.edges, func(a, b edge) int {
-		aYMin := min(a.y0, a.y1)
-		bYMin := min(b.y0, b.y1)
-		return cmp.Compare(aYMin, bYMin)
-	})
+	// Bucket edges by starting scanline. Order within a scanline does not
+	// matter: contributions are additive.
+	height := yMax - yMin
+	r.bucketHead = slices.Grow(r.bucketHead[:0], height)[:height]
+	for i := range r.bucketHead {
+		r.bucketHead[i] = -1
+	}
+	r.bucketNext = slices.Grow(r.bucketNext[:0], len(r.edges))[:len(r.edges)]
+	for i := range r.edges {
+		b := floorToInt(r.edges[i].ymin) - yMin
+		b = max(b, 0)
+		b = min(b, height-1)
+		r.bucketNext[i] = r.bucketHead[b]
+		r.bucketHead[b] = int32(i)
+	}
 
 	// Active edge list (indices into r.edges)
 	r.activeIdx = r.activeIdx[:0]
-	nextEdge := 0
 
 	// Process scanlines
 	for y := yMin; y < yMax; y++ {
@@ -684,14 +695,8 @@ func (r *Rasterizer) fillLargePath(xMin, xMax, yMin, yMax int, rule fillRule, em
 		yfNext := float64(y + 1)
 
 		// Add edges that start at this scanline
-		for nextEdge < len(r.edges) {
-			e := &r.edges[nextEdge]
-			edgeYMin := min(e.y0, e.y1)
-			if edgeYMin >= yfNext {
-				break
-			}
-			r.activeIdx = append(r.activeIdx, nextEdge)
-			nextEdge++
+		for idx := r.bucketHead[y-yMin]; idx >= 0; idx = r.bucketNext[idx] {
+			r.activeIdx = append(r.activeIdx, int(idx))
 		}
 
 		if len(r.activeIdx) == 0 {
