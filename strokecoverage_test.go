@@ -17,6 +17,7 @@
 package raster
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -38,17 +39,65 @@ func distToSegment(p, a, b vec.Vec2) float64 {
 	return p.Sub(a.Add(ab.Mul(t))).Length()
 }
 
-// TestStrokeCoverageAgainstDistanceField checks the stroke outline against an
-// exact description of the stroked region.
+// checkStrokeCoverage strokes the polyline pts with round caps and round
+// joins and compares the result against the exact stroked region.
 //
-// With round joins and round caps the stroke of a polyline is exactly the set
-// of points within half a line width of it, so the distance to the path decides
-// whether a pixel must be covered.  Pixels near the boundary are skipped, since
-// there partial coverage is expected.  The check catches both a stroke that
-// spills outside its region and one with holes punched out of it.
-func TestStrokeCoverageAgainstDistanceField(t *testing.T) {
+// With round caps and joins the stroke of a polyline is exactly the set of
+// points within half a line width of it, so the distance to the path decides
+// whether a pixel must be covered.  Pixels near the boundary are skipped,
+// since there partial coverage is expected.  The check catches both a stroke
+// that spills outside its region and one with holes punched out of it.
+func checkStrokeCoverage(t *testing.T, label string, pts []vec.Vec2, closed bool, width float64) {
+	t.Helper()
 	const size = 100
 
+	p := (&path.Data{}).MoveTo(pts[0])
+	for _, q := range pts[1:] {
+		p.LineTo(q)
+	}
+	if closed {
+		p.Close()
+	}
+
+	r := NewRasterizer(rect.Rect{URx: size, URy: size})
+	r.Width = width
+	r.Join = graphics.LineJoinRound
+	r.Cap = graphics.LineCapRound
+	r.MiterLimit = 10
+
+	covered := make([]bool, size*size)
+	r.Stroke(p.Iter(), func(y, xMin int, coverage []float32) {
+		for k, c := range coverage {
+			covered[y*size+xMin+k] = c > 0.5
+		}
+	})
+
+	d := width / 2
+	numSeg := len(pts) - 1
+	if closed {
+		numSeg = len(pts)
+	}
+	for y := range size {
+		for x := range size {
+			c := vec.Vec2{X: float64(x) + 0.5, Y: float64(y) + 0.5}
+			dist := math.Inf(1)
+			for k := range numSeg {
+				dist = min(dist, distToSegment(c, pts[k], pts[(k+1)%len(pts)]))
+			}
+			if math.Abs(dist-d) < 1 {
+				continue // antialiased boundary
+			}
+			if want := dist < d; covered[y*size+x] != want {
+				t.Fatalf("%s: pixel (%d,%d) covered=%v, want %v (distance %.3f, half width %.3f, %d points, closed=%v)",
+					label, x, y, covered[y*size+x], want, dist, d, len(pts), closed)
+			}
+		}
+	}
+}
+
+// TestStrokeCoverageAgainstDistanceField checks strokes of random polylines
+// with few, mostly sharp corners against the exact stroked region.
+func TestStrokeCoverageAgainstDistanceField(t *testing.T) {
 	for _, seed := range []int64{1, 7, 42} {
 		rng := rand.New(rand.NewSource(seed))
 		for i := range 70 {
@@ -63,50 +112,79 @@ func TestStrokeCoverageAgainstDistanceField(t *testing.T) {
 			closed := i%2 == 0
 			width := 2 + rng.Float64()*16
 
-			p := (&path.Data{}).MoveTo(pts[0])
-			for _, q := range pts[1:] {
-				p.LineTo(q)
-			}
-			if closed {
-				p.Close()
-			}
-
-			r := NewRasterizer(rect.Rect{URx: size, URy: size})
-			r.Width = width
-			r.Join = graphics.LineJoinRound
-			r.Cap = graphics.LineCapRound
-			r.MiterLimit = 10
-
-			covered := make([]bool, size*size)
-			r.Stroke(p.Iter(), func(y, xMin int, coverage []float32) {
-				for k, c := range coverage {
-					covered[y*size+xMin+k] = c > 0.5
-				}
-			})
-
-			d := width / 2
-			numSeg := len(pts) - 1
-			if closed {
-				numSeg = len(pts)
-			}
-			for y := range size {
-				for x := range size {
-					c := vec.Vec2{X: float64(x) + 0.5, Y: float64(y) + 0.5}
-					dist := math.Inf(1)
-					for k := range numSeg {
-						dist = min(dist, distToSegment(c, pts[k], pts[(k+1)%len(pts)]))
-					}
-					if math.Abs(dist-d) < 1 {
-						continue // antialiased boundary
-					}
-					if want := dist < d; covered[y*size+x] != want {
-						t.Fatalf("seed %d case %d: pixel (%d,%d) covered=%v, want %v (distance %.3f, half width %.3f, %d points, closed=%v)",
-							seed, i, x, y, covered[y*size+x], want, dist, d, len(pts), closed)
-					}
-				}
-			}
+			label := fmt.Sprintf("seed %d case %d", seed, i)
+			checkStrokeCoverage(t, label, pts, closed, width)
 		}
 	}
+}
+
+// TestStrokeCoverageSmoothPaths checks strokes of dense, gently turning
+// polylines -- the shape curve flattening produces -- against the exact
+// stroked region.  The open paths are random smooth walks; the closed paths
+// are perturbed circles, half of them with a single sharp vertex.
+func TestStrokeCoverageSmoothPaths(t *testing.T) {
+	centre := vec.Vec2{X: 50, Y: 50}
+
+	for _, seed := range []int64{1, 7, 42} {
+		rng := rand.New(rand.NewSource(seed))
+
+		for i := range 12 {
+			pts := smoothWalk(rng)
+			width := 2 + rng.Float64()*22
+			label := fmt.Sprintf("open seed %d case %d", seed, i)
+			checkStrokeCoverage(t, label, pts, false, width)
+		}
+
+		for i := range 12 {
+			numPts := 40 + rng.Intn(40)
+			radius := 12 + rng.Float64()*10
+			m := float64(2 + rng.Intn(3))
+			phase := rng.Float64() * 2 * math.Pi
+			amp := rng.Float64() * 0.2
+			pts := make([]vec.Vec2, numPts)
+			for j := range pts {
+				u := 2 * math.Pi * float64(j) / float64(numPts)
+				rj := radius * (1 + amp*math.Sin(m*u+phase))
+				pts[j] = centre.Add(vec.Vec2{X: rj * math.Cos(u), Y: rj * math.Sin(u)})
+			}
+			if i%2 == 0 {
+				// one sharp corner, away from the seam
+				k := numPts / 2
+				pts[k] = centre.Add(pts[k].Sub(centre).Mul(1.6))
+			}
+			width := 2 + rng.Float64()*22
+			label := fmt.Sprintf("closed seed %d case %d", seed, i)
+			checkStrokeCoverage(t, label, pts, true, width)
+		}
+	}
+}
+
+// smoothWalk builds a dense polyline with small random turns, steering back
+// towards the canvas centre when it drifts too far out.
+func smoothWalk(rng *rand.Rand) []vec.Vec2 {
+	centre := vec.Vec2{X: 50, Y: 50}
+	pos := vec.Vec2{X: 35 + rng.Float64()*30, Y: 35 + rng.Float64()*30}
+	ang := rng.Float64() * 2 * math.Pi
+	curv := (rng.Float64() - 0.5) * 0.3
+
+	numPts := 30 + rng.Intn(50)
+	pts := make([]vec.Vec2, 0, numPts)
+	pts = append(pts, pos)
+	const step = 2.5
+	for len(pts) < numPts {
+		curv += (rng.Float64() - 0.5) * 0.15
+		curv = max(-0.25, min(0.25, curv))
+		if off := pos.Sub(centre); off.Length() > 15 {
+			// steer towards the centre, keeping the turn gentle
+			want := math.Atan2(-off.Y, -off.X)
+			diff := math.Mod(want-ang+3*math.Pi, 2*math.Pi) - math.Pi
+			curv = max(-0.25, min(0.25, diff))
+		}
+		ang += curv
+		pos = pos.Add(vec.Vec2{X: step * math.Cos(ang), Y: step * math.Sin(ang)})
+		pts = append(pts, pos)
+	}
+	return pts
 }
 
 // TestDotWindingUnderOverlap checks that a dot drawn with a round cap adds to

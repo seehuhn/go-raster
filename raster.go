@@ -800,6 +800,12 @@ const (
 	// collinear and no join is needed.
 	collinearityThreshold = 1e-6
 
+	// maxStripTurn bounds the accumulated turn angle within a single strip of
+	// the stroke outline. Below half a turn all tangents of a strip fit in a
+	// quarter-turn cone, which keeps both offset boundaries advancing in one
+	// common direction and hence the strip simple.
+	maxStripTurn = math.Pi / 2
+
 	// maxFlattenSegments bounds the number of line segments a single curve or
 	// arc is flattened into. A curve never needs more segments than there are
 	// device pixels along it, so this ceiling cannot affect legitimate output

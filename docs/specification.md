@@ -220,9 +220,9 @@ This section describes how strokes become filled outlines. After expansion, the 
 
 ### 6.1 Overview
 
-Stroke expansion proceeds as follows. First, flatten curves (§5). Second, apply the dash pattern, splitting the path at transitions. Third, emit one quadrilateral per segment (§6.2), one piece per join (§6.4), and one piece per cap (§6.3). The result is a set of convex polygons in user space. The pipeline (§2.4) then transforms them to device space.
+Stroke expansion proceeds as follows. First, flatten curves (§5). Second, apply the dash pattern, splitting the path at transitions. Third, emit pieces covering the segments, joins, and caps: runs of gently turning segments merge into strips (§6.11); every other segment becomes a quadrilateral (§6.2), with one piece per remaining join (§6.4) and per cap (§6.3). The result is a set of simple polygons in user space. The pipeline (§2.4) then transforms them to device space.
 
-The stroked region is the union of these pieces. Every piece is wound clockwise, so under the nonzero winding rule (§3) overlapping pieces reinforce one another and the union fills uniformly. Winding direction is therefore load-bearing: a piece wound the other way would cancel the pieces it overlaps and leave a hole.
+The stroked region is the union of these pieces. Every piece is simple and wound clockwise, so under the nonzero winding rule (§3) overlapping pieces reinforce one another and the union fills uniformly. Winding direction is therefore load-bearing: a piece wound the other way would cancel the pieces it overlaps and leave a hole.
 
 Tracing a single contour around the outline instead does not work. Wherever a stroke covers the same area twice — a tight curve, a self-crossing path, a dash landing on an earlier one — the contour reverses orientation and the winding cancels to zero.
 
@@ -254,7 +254,7 @@ Let T1 be the incoming tangent, T2 the outgoing tangent, and d = line_width / 2.
 
 Taking θ from atan2 rather than from the sign of the cross product alone keeps the cusp case well defined (§6.8): where the path doubles back the cross product vanishes, but atan2 still yields ±180° and picks out the side the path turns towards.
 
-If |θ| < δ the path continues straight, the two quadrilaterals meet flush, and no piece is needed.
+If |θ| < δ the path continues straight, the two quadrilaterals meet flush, and no piece is needed. A joint folded into a strip (§6.11) also gets no piece; there the strip's chord stands in for the join.
 
 The join lies on the outer side of the corner, away from the turn. Let s = −sign(θ), and let the outer normals be n1 = s × (−T1.y, T1.x) and n2 = s × (−T2.y, T2.x). They span exactly the turn angle. Order them so that the sweep from the first to the second is clockwise: take (n1, n2) for a right turn and (n2, n1) for a left turn, and call the result n_from and n_to.
 
@@ -344,11 +344,27 @@ Computing the union of self-intersecting regions adds complexity without improvi
 
 ### 6.11 Assembling the Stroke Outline
 
-This section describes the order of assembly.
+This section describes how segments group into pieces.
 
-For an open subpath S0, S1, ..., Sn−1: start with the cap at S0's beginning, walk forward along the left side adding edges and joins, add the cap at Sn−1's end, walk backward along the right side adding edges and joins, then close the path.
+Emitting one quadrilateral per segment plus one piece per join is always correct, but a flattened curve then costs about seven edges per segment. Most of its joints turn only gently, and there the join hardly matters: runs of such segments merge into strips.
 
-For a closed subpath: omit caps; add a join connecting the last segment to the first.
+A strip covers consecutive segments with a single polygon: walk forward along the left-hand offset points (for each segment its two endpoints offset by d×N), then backward along the right-hand offset points, and close. Where two segments meet inside a strip, the two offset points on each side are connected by a short chord, and the chord stands in for the join piece.
+
+**Substitution error.** At a joint with turn angle θ the chord differs from the exact join by a second-order sliver: nothing for a bevel (the chord is the bevel), a circular segment of sagitta d × (1 − cos(θ/2)) for a round join, and the omitted miter tip of height d × tan(θ/2) × sin(θ/2) for a miter. For |θ| ≤ 90° all three are below d × sin²θ. The inner-side chord similarly cuts a second-order sliver off the overlap region. A joint may fold only if
+
+    σ × d × sin²θ ≤ ε,
+
+where σ bounds the CTM's largest singular value (the implementation uses the Frobenius norm), so the substitution error in device space stays below the flatness tolerance already accepted by curve flattening (§5).
+
+**Winding safety.** The union-of-pieces argument (§6.1) needs each piece to be simple and clockwise, and a strip could violate this only if one of its offset boundaries doubles back. Two further conditions prevent that. First, per joint,
+
+    d × tan(|θ|/2) ≤ 0.49 × min(L1, L2),
+
+where L1 and L2 are the adjacent segment lengths. The inner offset corner then stays within either half of its segment — equivalently, the offset distance stays below the local radius of curvature — so the cutbacks from a segment's two ends cannot meet, and each offset boundary advances monotonically along its segment. Second, the accumulated turn within one strip is capped at 90°. All tangents of a strip then lie in a quarter-turn cone; both offset boundaries advance strictly in the direction of the cone's axis and stay on opposite sides of the spine, and a polygon made of two disjoint monotone chains joined by its two end edges is simple. It runs forward on the left and back on the right, hence clockwise, like a single segment quadrilateral (§6.2).
+
+A joint that fails any of these tests breaks the strip: emit the strip so far, then the joint's join piece (§6.4), then start a new strip. A polyline meeting at real corners degenerates to one quadrilateral per segment.
+
+For an open subpath the first strip starts at the first segment, and caps (§6.3) terminate both ends. A closed subpath has a joint before every segment, including the seam between the last segment and the first, and strips may cross the seam. Assembly starts at a joint that must break anyway: the first unfoldable joint, or, if the whole loop is gentle, an arbitrary joint — the turn cap, which any closed loop exceeds, forces breaks regardless.
 
 The outline is in user space. The pipeline (§2.4) transforms it to device space before rasterisation.
 

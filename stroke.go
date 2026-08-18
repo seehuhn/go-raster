@@ -267,12 +267,14 @@ func (r *Rasterizer) endPiece(start int) {
 
 // strokeSubpath builds the stroke outline for a single subpath into r.stroke.
 //
-// The outline is emitted as a union of convex pieces: one quadrilateral per
-// segment, plus one piece per join and per cap.  Every piece winds the same
-// way, so the nonzero winding rule fills exactly their union, however much the
-// stroke overlaps itself.  A single contour tracing the outline cannot do this:
-// where the stroke covers the same area twice the contour reverses orientation
-// and the winding cancels to zero, leaving holes.
+// The outline is emitted as a union of simple clockwise pieces.  Runs of
+// segments whose joints turn gently merge into strips: one polygon walking
+// forward along the left offsets and back along the right offsets, with a
+// short chord standing in for each interior join.  A joint that turns too
+// sharply to fold breaks the strip and receives a separate join piece, so a
+// strip degenerates to one quadrilateral per segment where the path has real
+// corners.  Every piece winds the same way, so the nonzero winding rule fills
+// exactly their union, however much the stroke overlaps itself.
 //
 // Zero-length subpaths are handled by the caller before invoking this method.
 func (r *Rasterizer) strokeSubpath(segs []strokeSegment, closed bool) {
@@ -283,30 +285,113 @@ func (r *Rasterizer) strokeSubpath(segs []strokeSegment, closed bool) {
 
 	d := r.Width / 2
 
-	// one quadrilateral per segment
-	for i := range segs {
-		seg := &segs[i]
-		off := seg.N.Mul(d)
+	// Device-space bound on the half width, used in the folding tolerance.
+	// The Frobenius norm bounds the largest singular value of the CTM.
+	m1 := r.transformLinear(vec.Vec2{X: 1})
+	m2 := r.transformLinear(vec.Vec2{Y: 1})
+	dDev := d * math.Sqrt(m1.Dot(m1)+m2.Dot(m2))
+
+	// foldable reports whether the joint between prev and cur can be folded
+	// into a strip, and returns an upper bound on the turn angle there.
+	//
+	// Folding replaces the join by the chord between the two offset points.
+	// The first test bounds the substitution error, which is below d*sin²θ
+	// for every join style, by the flatness tolerance.  The second test is
+	// the winding-safety condition: the offset distance must stay below the
+	// local radius of curvature, with the margin split between the two ends
+	// of each segment, so the inner boundary keeps advancing and the strip
+	// stays simple.
+	foldable := func(prev, cur *strokeSegment) (bool, float64) {
+		cosT := prev.T.Dot(cur.T)
+		if cosT <= 0 {
+			return false, 0
+		}
+		sinT := prev.T.X*cur.T.Y - prev.T.Y*cur.T.X
+		if dDev*sinT*sinT > r.Flatness {
+			return false, 0
+		}
+		tanHalf := math.Abs(sinT) / (1 + cosT)
+		if d*tanHalf > 0.49*min(prev.Len, cur.Len) {
+			return false, 0
+		}
+		return true, 2 * tanHalf // 2*tan(θ/2) ≥ θ
+	}
+
+	// emitStrip emits count segments starting at index first, wrapping around
+	// for closed subpaths, as one clockwise piece.
+	emitStrip := func(first, count int) {
 		start := r.beginPiece()
-		r.stroke = append(r.stroke,
-			seg.A.Add(off), seg.B.Add(off), seg.B.Sub(off), seg.A.Sub(off))
+		seg := &segs[first]
+		r.stroke = append(r.stroke, seg.A.Add(seg.N.Mul(d)))
+		for k := range count {
+			seg = &segs[(first+k)%n]
+			r.stroke = append(r.stroke, seg.B.Add(seg.N.Mul(d)))
+			if k+1 < count {
+				next := &segs[(first+k+1)%n]
+				r.stroke = append(r.stroke, next.A.Add(next.N.Mul(d)))
+			}
+		}
+		for k := count - 1; k >= 0; k-- {
+			seg = &segs[(first+k)%n]
+			r.stroke = append(r.stroke, seg.B.Sub(seg.N.Mul(d)), seg.A.Sub(seg.N.Mul(d)))
+		}
 		r.endPiece(start)
 	}
 
-	// one piece per join
-	for i := range segs {
-		if i == 0 && !closed {
-			continue // an open subpath has no join before its first segment
-		}
-		prev := &segs[(i+n-1)%n]
-		r.addJoinPiece(segs[i].A, prev.T, segs[i].T, d)
-	}
-
-	// caps at both ends of an open subpath
 	if !closed {
+		stripStart := 0
+		turn := 0.0
+		for i := 1; i < n; i++ {
+			prev, cur := &segs[i-1], &segs[i]
+			ok, dTurn := foldable(prev, cur)
+			if ok && turn+dTurn <= maxStripTurn {
+				turn += dTurn
+				continue
+			}
+			emitStrip(stripStart, i-stripStart)
+			r.addJoinPiece(cur.A, prev.T, cur.T, d)
+			stripStart = i
+			turn = 0
+		}
+		emitStrip(stripStart, n-stripStart)
+
 		r.addCapPiece(segs[0].A, segs[0].T.Mul(-1), d)
 		r.addCapPiece(segs[n-1].B, segs[n-1].T, d)
+		return
 	}
+
+	// A closed subpath has a joint before every segment, including the seam
+	// between the last segment and the first.  Strips may cross the seam, so
+	// start at a joint that must break anyway: the first unfoldable joint, or
+	// joint 0 if the whole loop is gentle (the turn cap, which any closed
+	// loop exceeds, then forces breaks elsewhere).
+	breakAt := 0
+	for j := range n {
+		prev := &segs[(j+n-1)%n]
+		if ok, _ := foldable(prev, &segs[j]); !ok {
+			breakAt = j
+			break
+		}
+	}
+
+	stripStart := breakAt
+	turn := 0.0
+	for k := 1; k < n; k++ {
+		i := (breakAt + k) % n
+		prev, cur := &segs[(i+n-1)%n], &segs[i]
+		ok, dTurn := foldable(prev, cur)
+		if ok && turn+dTurn <= maxStripTurn {
+			turn += dTurn
+			continue
+		}
+		emitStrip(stripStart, (i-stripStart+n)%n)
+		r.addJoinPiece(cur.A, prev.T, cur.T, d)
+		stripStart = i
+		turn = 0
+	}
+	emitStrip(stripStart, (breakAt-stripStart-1+n)%n+1)
+	prev := &segs[(breakAt+n-1)%n]
+	r.addJoinPiece(segs[breakAt].A, prev.T, segs[breakAt].T, d)
 }
 
 // addJoinPiece adds the join at P as a separate piece of the stroke outline.
