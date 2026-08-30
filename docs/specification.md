@@ -62,6 +62,20 @@ Each subpath is implicitly closed. When a MoveTo command starts a new subpath, t
 
 Explicit Close commands have the same effect as an implicit close followed by setting the current point to the subpath start. A path with only MoveTo commands (no drawing operations) produces no edges.
 
+### 2.6 Device-Space Clipping
+
+Edges are clipped to the clip rectangle as they are transformed into device space, before any buffer is sized. This bounds every later stage by the clip, rather than by the input coordinates, which the CTM may place arbitrarily far outside it.
+
+An edge is first trimmed to the clip's vertical extent; the parts above and below reach no pixel row inside the clip. What remains is then split horizontally into three parts.
+
+The part right of the clip is dropped: integration runs left to right (§3.3), so an edge right of every pixel in the clip contributes to none of them. That edge still bounds the filled region on the right, so its extent must still enter the bounding box even though no edge is recorded for it. Otherwise a shape overhanging the clip on the right would stop being filled at its rightmost surviving edge.
+
+The part left of the clip is replaced by a vertical edge one pixel left of the clip. This carries the same signed vertical extent, so the winding reaching each pixel inside the clip is unchanged, and §3.2 already covers an edge lying left of the rendering region by setting area = cover.
+
+The part inside the clip is kept unchanged.
+
+One further class of edge is dropped alongside the horizontal edges of §3.2: an edge whose x span overflows relative to its vertical extent, making dx/dy non-finite. Across the width of the clip such an edge rises by far less than one ulp of y, so it is horizontal wherever it could contribute, and keeping it would feed infinities into the splits above.
+
 ---
 
 ## 3. Core Algorithm: Signed-Area Coverage Accumulation
@@ -146,9 +160,17 @@ Memory usage is O(width × height). A 256×256 region requires roughly 512 KB. T
 
 For large paths (page-spanning fills), allocate 1D buffers one row tall: cover[x] and area[x] as float32 arrays.
 
-First, compute the bounding box and clamp to clip bounds. Second, build an edge list storing (x0, y0, x1, y1) per edge. Third, sort edges by y_min. Fourth, process scanlines from y_min to y_max: add starting edges to the active list, compute contributions, remove ending edges, integrate and emit, then clear the buffers.
+First, compute the bounding box and clamp to clip bounds. Second, build an edge list, storing per edge the x-coordinate at y_min, the vertical extent (y_min, y_max), dx/dy, and the sign of its winding contribution. Third, bucket the edges by starting scanline; no sort is needed, because contributions within a scanline are additive and their order does not matter. Fourth, process scanlines from y_min to y_max: add starting edges to the active list, compute contributions, remove ending edges, then integrate and emit.
 
-Memory usage is O(width + edges), independent of height. This approach requires sorting but suits large regions.
+Memory usage is O(width + edges), independent of height.
+
+#### Sparse Rows
+
+A row is integrated only across the span of buffer cells its active edges wrote, not the full bounding-box width, and only that span is cleared afterwards, leaving the buffers zero for the next row. Per-row work then follows the span an edge set touches rather than the width of the bounding box: a thin diagonal across a page-wide clip touches a few cells per row instead of the whole row.
+
+The winding carried past the end of that span applies uniformly to the rest of the row, whose pixels lie right of every edge and so receive nothing further from integration. When it is non-zero, the fill rule is applied to it once and the result written across the remainder of the row. This is what fills a shape overhanging the clip on the right, whose right-hand edges §2.6 dropped.
+
+For a closed path lying entirely within the clip, the covers of the edges crossing a row cancel exactly and nothing is carried past the span. A residual below a small epsilon is float32 rounding and counts as zero.
 
 ### 4.3 Selection Heuristic
 
@@ -156,7 +178,7 @@ Use Approach A when bounding box area (width × height in pixels) falls below a 
 
 ### 4.4 Output
 
-After integrating each scanline, pass coverage data to the compositor: the Y coordinate, x_min, x_max, and the coverage array.
+After integrating each scanline, pass coverage data to the compositor: the Y coordinate, the x-coordinate of the first pixel, and the coverage array, whose length gives the extent. Leading and trailing zero coverage is trimmed first, and a row left with no coverage is not passed on at all.
 
 ---
 
@@ -354,7 +376,7 @@ A strip covers consecutive segments with a single polygon: walk forward along th
 
     σ × d × sin²θ ≤ ε,
 
-where σ bounds the CTM's largest singular value (the implementation uses the Frobenius norm), so the substitution error in device space stays below the flatness tolerance already accepted by curve flattening (§5).
+where σ bounds the CTM's largest singular value (the implementation uses σ_max, §5.2), so the substitution error in device space stays below the flatness tolerance already accepted by curve flattening (§5).
 
 **Winding safety.** The union-of-pieces argument (§6.1) needs each piece to be simple and clockwise, and a strip could violate this only if one of its offset boundaries doubles back. Two further conditions prevent that. First, per joint,
 

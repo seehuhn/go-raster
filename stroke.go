@@ -18,19 +18,12 @@ package raster
 
 import (
 	"math"
+	"slices"
 
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/pdf/graphics"
 )
-
-// strokeSegment represents a line segment in user coordinates
-type strokeSegment struct {
-	A, B vec.Vec2 // endpoints in user space
-	T    vec.Vec2 // unit tangent (A→B direction)
-	N    vec.Vec2 // unit normal (90° CCW from T)
-	Len  float64  // distance from A to B
-}
 
 // Stroke renders the path as a stroked outline using Width, Cap, Join,
 // MiterLimit, Dash, and DashPhase. The emit callback receives coverage
@@ -42,6 +35,13 @@ func (r *Rasterizer) Stroke(p path.Path, emit func(y, xMin int, coverage []float
 	if r.Width <= 0 {
 		panic("raster: Width must be positive")
 	}
+	if r.Clip.Empty() {
+		return // skip flattening and edge collection when nothing can be emitted
+	}
+
+	// bound on the CTM's device-space scaling, used for join folding and arc
+	// segment counts
+	_, r.ctmSigmaMax = r.CTM.SingularValues()
 
 	// Flatten path into subpaths (results stored in r.segs, etc.)
 	r.flattenPath(p)
@@ -84,16 +84,28 @@ func (r *Rasterizer) strokeAllSubpaths() {
 	}
 }
 
+// strokeSegment represents a line segment in user coordinates
+type strokeSegment struct {
+	A, B vec.Vec2 // endpoints in user space
+	T    vec.Vec2 // unit tangent (A→B direction)
+	N    vec.Vec2 // unit normal (90° CCW from T)
+	Len  float64  // distance from A to B
+}
+
 // getSubpathSegments returns the segments for subpath i as a slice into segs.
 func (r *Rasterizer) getSubpathSegments(i int) []strokeSegment {
-	start := r.segsOffsets[i]
-	var end int
-	if i+1 < len(r.segsOffsets) {
-		end = r.segsOffsets[i+1]
-	} else {
-		end = len(r.segs)
+	return sliceAt(r.segs, r.segsOffsets, i)
+}
+
+// sliceAt returns slice i of data, where offsets holds the start index of
+// each slice and the last slice runs to the end of data.
+func sliceAt[T any](data []T, offsets []int, i int) []T {
+	start := offsets[i]
+	end := len(data)
+	if i+1 < len(offsets) {
+		end = offsets[i+1]
 	}
-	return r.segs[start:end]
+	return data[start:end]
 }
 
 // strokeDashedSubpaths applies dash pattern and strokes the resulting segments.
@@ -121,20 +133,13 @@ func (r *Rasterizer) strokeDashedSubpaths() {
 			continue
 		}
 
-		r.strokeSubpath(segs, false) // dashed subpaths are never closed
+		r.strokeSubpath(segs, r.dashedClosed[i])
 	}
 }
 
 // getDashedSegments returns the segments for dashed subpath i as a slice into dashedSegs.
 func (r *Rasterizer) getDashedSegments(i int) []strokeSegment {
-	start := r.dashedSegsOffsets[i]
-	var end int
-	if i+1 < len(r.dashedSegsOffsets) {
-		end = r.dashedSegsOffsets[i+1]
-	} else {
-		end = len(r.dashedSegs)
-	}
-	return r.dashedSegs[start:end]
+	return sliceAt(r.dashedSegs, r.dashedSegsOffsets, i)
 }
 
 // flattenPath walks the path, flattens curves, and populates the flattening
@@ -161,13 +166,7 @@ func (r *Rasterizer) flattenPath(p path.Path) {
 		case path.CmdMoveTo:
 			// close previous subpath if needed
 			if inSubpath && (len(r.segs) > subpathStartIdx || sawDrawingCmd) {
-				if len(r.segs) == subpathStartIdx {
-					// degenerate subpath (no orientation) - collect for special handling
-					r.degeneratePoints = append(r.degeneratePoints, subpathStartPt)
-				} else {
-					r.segsOffsets = append(r.segsOffsets, subpathStartIdx)
-					r.subpathClosed = append(r.subpathClosed, false)
-				}
+				r.finishSubpath(subpathStartIdx, subpathStartPt, false)
 			}
 			currentPt = pts[0]
 			subpathStartPt = currentPt
@@ -205,13 +204,7 @@ func (r *Rasterizer) flattenPath(p path.Path) {
 				if currentPt != subpathStartPt {
 					r.addStrokeSegment(currentPt, subpathStartPt)
 				}
-				if len(r.segs) == subpathStartIdx {
-					// degenerate closed subpath - collect for special handling
-					r.degeneratePoints = append(r.degeneratePoints, subpathStartPt)
-				} else {
-					r.segsOffsets = append(r.segsOffsets, subpathStartIdx)
-					r.subpathClosed = append(r.subpathClosed, true)
-				}
+				r.finishSubpath(subpathStartIdx, subpathStartPt, true)
 				currentPt = subpathStartPt
 				subpathStartIdx = len(r.segs)
 				inSubpath = false
@@ -222,13 +215,19 @@ func (r *Rasterizer) flattenPath(p path.Path) {
 
 	// handle unclosed subpath at end
 	if inSubpath && (len(r.segs) > subpathStartIdx || sawDrawingCmd) {
-		if len(r.segs) == subpathStartIdx {
-			// degenerate subpath - collect for special handling
-			r.degeneratePoints = append(r.degeneratePoints, subpathStartPt)
-		} else {
-			r.segsOffsets = append(r.segsOffsets, subpathStartIdx)
-			r.subpathClosed = append(r.subpathClosed, false)
-		}
+		r.finishSubpath(subpathStartIdx, subpathStartPt, false)
+	}
+}
+
+// finishSubpath records the subpath starting at startIdx in r.segs: as a
+// degenerate point (no orientation) if it has no segments, otherwise as a
+// regular subpath with the given closedness.
+func (r *Rasterizer) finishSubpath(startIdx int, startPt vec.Vec2, closed bool) {
+	if len(r.segs) == startIdx {
+		r.degeneratePoints = append(r.degeneratePoints, startPt)
+	} else {
+		r.segsOffsets = append(r.segsOffsets, startIdx)
+		r.subpathClosed = append(r.subpathClosed, closed)
 	}
 }
 
@@ -285,11 +284,8 @@ func (r *Rasterizer) strokeSubpath(segs []strokeSegment, closed bool) {
 
 	d := r.Width / 2
 
-	// Device-space bound on the half width, used in the folding tolerance.
-	// The Frobenius norm bounds the largest singular value of the CTM.
-	m1 := r.transformLinear(vec.Vec2{X: 1})
-	m2 := r.transformLinear(vec.Vec2{Y: 1})
-	dDev := d * math.Sqrt(m1.Dot(m1)+m2.Dot(m2))
+	// device-space bound on the half width, used in the folding tolerance
+	dDev := d * r.ctmSigmaMax
 
 	// foldable reports whether the joint between prev and cur can be folded
 	// into a strip, and returns an upper bound on the turn angle there.
@@ -492,11 +488,8 @@ func (r *Rasterizer) addCapPiece(P, T vec.Vec2, d float64) {
 // startDir is the unit vector from center to arc start.
 // sweep is the sweep angle in radians (positive = CCW).
 func (r *Rasterizer) addArc(center vec.Vec2, radius float64, startDir vec.Vec2, sweep float64) {
-	// Compute number of segments based on flatness tolerance
-	// Using device-space radius for segment count
-	devRadius := r.transformLinear(vec.Vec2{X: radius, Y: 0}).Length()
-	devRadius2 := r.transformLinear(vec.Vec2{X: 0, Y: radius}).Length()
-	devRadius = max(devRadius, devRadius2)
+	// device-space radius bound, used for segment count
+	devRadius := radius * r.ctmSigmaMax
 
 	if devRadius < r.Flatness {
 		// arc too small to matter, just add its endpoints
@@ -554,11 +547,15 @@ func (r *Rasterizer) addSquare(center vec.Vec2, T vec.Vec2, d float64) {
 }
 
 // applyDashPattern applies the dash pattern to flattened subpaths.
-// Results are stored in r.dashedSegs and r.dashedSegsOffsets.
+// Results are stored in r.dashedSegs, r.dashedSegsOffsets and
+// r.dashedClosed.  A dash is closed only if it covers a whole closed
+// subpath; a dash which wraps around the start point of a closed subpath
+// is merged with the first dash into one open dash.
 func (r *Rasterizer) applyDashPattern() {
 	// Clear output buffers (preserving capacity)
 	r.dashedSegs = r.dashedSegs[:0]
 	r.dashedSegsOffsets = r.dashedSegsOffsets[:0]
+	r.dashedClosed = r.dashedClosed[:0]
 
 	dash := r.Dash
 	dashLen := len(dash)
@@ -601,12 +598,13 @@ func (r *Rasterizer) applyDashPattern() {
 		// join, but only in this invisible regime.
 		subpathLen := 0.0
 		for _, seg := range segments {
-			subpathLen += seg.B.Sub(seg.A).Length()
+			subpathLen += seg.Len
 		}
 		if subpathLen*float64(dashLen)/rawSum > float64(maxDashSegments) {
 			dashStart := len(r.dashedSegs)
 			r.dashedSegs = append(r.dashedSegs, segments...)
 			r.dashedSegsOffsets = append(r.dashedSegsOffsets, dashStart)
+			r.dashedClosed = append(r.dashedClosed, closed)
 			continue
 		}
 
@@ -626,6 +624,7 @@ func (r *Rasterizer) applyDashPattern() {
 		if isOn && remaining == 0 && len(segments) > 0 {
 			seg := segments[0]
 			r.dashedSegsOffsets = append(r.dashedSegsOffsets, len(r.dashedSegs))
+			r.dashedClosed = append(r.dashedClosed, false)
 			r.dashedSegs = append(r.dashedSegs, strokeSegment{A: seg.A, B: seg.A, T: seg.T, N: seg.N})
 			// Advance to next dash element
 			dashIdx++
@@ -635,8 +634,8 @@ func (r *Rasterizer) applyDashPattern() {
 
 		// Track if we started with "on" for closed path joining
 		startedOn := isOn
-		firstDashStart := -1 // index into dashedSegs where first dash starts
-		firstDashEnd := -1   // index into dashedSegs where first dash ends
+		firstDashStart := -1  // index into dashedSegs where first dash starts
+		firstDashOffset := -1 // index into dashedSegsOffsets of the first dash
 
 		// Walk segments and split at dash boundaries
 		dashStartIdx := len(r.dashedSegs) // start of current dash in dashedSegs
@@ -699,12 +698,13 @@ func (r *Rasterizer) applyDashPattern() {
 					// Save first dash indices for closed path joining
 					if firstDashStart < 0 && len(r.dashedSegs) > dashStartIdx {
 						firstDashStart = dashStartIdx
-						firstDashEnd = len(r.dashedSegs)
+						firstDashOffset = len(r.dashedSegsOffsets)
 					}
 
 					// Emit current dash if non-empty
 					if len(r.dashedSegs) > dashStartIdx {
 						r.dashedSegsOffsets = append(r.dashedSegsOffsets, dashStartIdx)
+						r.dashedClosed = append(r.dashedClosed, false)
 						dashStartIdx = len(r.dashedSegs)
 					}
 				}
@@ -719,18 +719,24 @@ func (r *Rasterizer) applyDashPattern() {
 
 		// Emit final dash if any
 		if len(r.dashedSegs) > dashStartIdx {
-			// For closed paths, check if we should join first and last dash
 			if closed && startedOn && isOn && firstDashStart >= 0 {
-				// Merge: append first dash segments to current dash
-				for i := firstDashStart; i < firstDashEnd; i++ {
-					r.dashedSegs = append(r.dashedSegs, r.dashedSegs[i])
+				// The pattern wraps around the start point, so the final
+				// dash continues into the first one.  Move the final dash's
+				// segments in front of the first dash, making the merged
+				// dash contiguous, and shift the offsets in between.
+				segs := r.dashedSegs[firstDashStart:]
+				lastLen := len(r.dashedSegs) - dashStartIdx
+				slices.Reverse(segs)
+				slices.Reverse(segs[:lastLen])
+				slices.Reverse(segs[lastLen:])
+				for j := firstDashOffset + 1; j < len(r.dashedSegsOffsets); j++ {
+					r.dashedSegsOffsets[j] += lastLen
 				}
-				// Remove the first dash from offsets if we added it
-				if len(r.dashedSegsOffsets) > 0 && r.dashedSegsOffsets[0] == firstDashStart {
-					r.dashedSegsOffsets = r.dashedSegsOffsets[1:]
-				}
+				continue
 			}
 			r.dashedSegsOffsets = append(r.dashedSegsOffsets, dashStartIdx)
+			// the dash is closed only if it covers the whole closed subpath
+			r.dashedClosed = append(r.dashedClosed, closed && startedOn && isOn)
 		}
 	}
 }
@@ -748,15 +754,7 @@ func (r *Rasterizer) fillStrokeOutlines(emit func(y, xMin int, coverage []float3
 		return
 	}
 
-	// Choose approach based on bounding box size
-	width := xMax - xMin
-	height := yMax - yMin
-
-	if width*height < r.smallPathThreshold {
-		r.fillSmallPath(xMin, xMax, yMin, yMax, fillNonZero, emit)
-	} else {
-		r.fillLargePath(xMin, xMax, yMin, yMax, fillNonZero, emit)
-	}
+	r.rasterizeEdges(xMin, xMax, yMin, yMax, fillNonZero, emit)
 }
 
 // collectStrokeEdges builds the edge list directly from stroke polygons.
@@ -765,15 +763,8 @@ func (r *Rasterizer) collectStrokeEdges() (xMin, xMax, yMin, yMax int, ok bool) 
 	r.edges = r.edges[:0]
 	r.edgeBBoxFirst = true
 
-	for i, start := range r.strokeOffsets {
-		// Determine end of this polygon
-		var end int
-		if i+1 < len(r.strokeOffsets) {
-			end = r.strokeOffsets[i+1]
-		} else {
-			end = len(r.stroke)
-		}
-		poly := r.stroke[start:end]
+	for i := range r.strokeOffsets {
+		poly := sliceAt(r.stroke, r.strokeOffsets, i)
 		if len(poly) < 2 {
 			continue
 		}
@@ -790,29 +781,5 @@ func (r *Rasterizer) collectStrokeEdges() (xMin, xMax, yMin, yMax int, ok bool) 
 		return 0, 0, 0, 0, false
 	}
 
-	// a non-finite CTM yields NaN extremes; treat the path as degenerate
-	if math.IsNaN(r.edgeDevXMin) || math.IsNaN(r.edgeDevXMax) ||
-		math.IsNaN(r.edgeDevYMin) || math.IsNaN(r.edgeDevYMax) {
-		return 0, 0, 0, 0, false
-	}
-
-	// clamp to clip bounds and convert to integers
-	clipXMin := int(r.Clip.LLx)
-	clipXMax := int(r.Clip.URx)
-	clipYMin := int(r.Clip.LLy)
-	clipYMax := int(r.Clip.URy)
-
-	// The +1 turns the inclusive max pixel into an exclusive upper bound.
-	// Clamping to clipMax-1 first keeps that +1 within the int range even when
-	// floorToInt saturates on an extreme CTM.
-	xMin = max(floorToInt(r.edgeDevXMin), clipXMin)
-	xMax = min(floorToInt(r.edgeDevXMax), clipXMax-1) + 1
-	yMin = max(floorToInt(r.edgeDevYMin), clipYMin)
-	yMax = min(floorToInt(r.edgeDevYMax), clipYMax-1) + 1
-
-	if xMin >= xMax || yMin >= yMax {
-		return 0, 0, 0, 0, false
-	}
-
-	return xMin, xMax, yMin, yMax, true
+	return r.clippedEdgeBounds()
 }

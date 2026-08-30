@@ -25,7 +25,6 @@ import (
 	"golang.org/x/image/vector"
 
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/geom/rect"
 	"seehuhn.de/go/geom/vec"
 )
 
@@ -35,7 +34,7 @@ func BenchmarkRasterizerMethodA(b *testing.B) {
 
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("%dx%d", size, size), func(b *testing.B) {
-			clip := rect.Rect{LLx: 0, LLy: 0, URx: float64(size), URy: float64(size)}
+			clip := image.Rect(0, 0, size, size)
 			r := NewRasterizer(clip)
 			r.smallPathThreshold = 1 << 30 // Force method A
 
@@ -69,7 +68,7 @@ func BenchmarkRasterizerMethodB(b *testing.B) {
 
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("%dx%d", size, size), func(b *testing.B) {
-			clip := rect.Rect{LLx: 0, LLy: 0, URx: float64(size), URy: float64(size)}
+			clip := image.Rect(0, 0, size, size)
 			r := NewRasterizer(clip)
 			r.smallPathThreshold = 0 // Force method B
 
@@ -186,4 +185,26 @@ func addCircleToVector(r *vector.Rasterizer, cx, cy, radius float32, clockwise b
 		r.CubeTo(cx-radius, cy-kr, cx-kr, cy-radius, cx, cy-radius)
 	}
 	r.ClosePath()
+}
+
+// BenchmarkSparseRows fills a thin diagonal across a wide clip using the
+// active edge list: the bounding box spans the whole clip, but each row
+// touches only a few pixels, so per-row work should scale with the touched
+// span rather than the clip width.
+func BenchmarkSparseRows(b *testing.B) {
+	const width, height = 2000, 1000
+	p := (&path.Data{}).
+		MoveTo(vec.Vec2{X: 0, Y: 0}).
+		LineTo(vec.Vec2{X: 3.3, Y: 0}).
+		LineTo(vec.Vec2{X: width, Y: height}).
+		LineTo(vec.Vec2{X: width - 3.3, Y: height}).
+		Close()
+	r := NewRasterizer(image.Rect(0, 0, width, height))
+	r.smallPathThreshold = 0
+	emit := func(y, xMin int, coverage []float32) {}
+
+	b.ResetTimer()
+	for b.Loop() {
+		r.FillNonZero(p.Iter(), emit)
+	}
 }

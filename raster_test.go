@@ -32,7 +32,6 @@ import (
 
 	"seehuhn.de/go/geom/matrix"
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/geom/rect"
 	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/raster/testcases"
 )
@@ -85,12 +84,7 @@ func TestAgainstReference(t *testing.T) {
 // Each byte represents coverage from 0 (transparent) to 255 (opaque).
 // The threshold parameter controls the Approach A/B cutoff for testing.
 func renderExample(tc testcases.TestCase, buf []byte, width, height, stride int, threshold int) {
-	clip := rect.Rect{
-		LLx: 0,
-		LLy: 0,
-		URx: float64(width),
-		URy: float64(height),
-	}
+	clip := image.Rect(0, 0, width, height)
 	r := NewRasterizer(clip)
 	r.smallPathThreshold = threshold
 
@@ -260,7 +254,7 @@ func TestTriangleCoverage(t *testing.T) {
 		Close()
 
 	// Create rasterizer with clip covering the triangle
-	clip := rect.Rect{LLx: 0, LLy: 0, URx: 10, URy: 1}
+	clip := image.Rect(0, 0, 10, 1)
 	r := NewRasterizer(clip)
 
 	// Collect coverage values
@@ -286,6 +280,90 @@ func TestTriangleCoverage(t *testing.T) {
 	}
 }
 
+// clipTestSquare is a square large enough to overhang any clip used below.
+func clipTestSquare() *path.Data {
+	return (&path.Data{}).
+		MoveTo(vec.Vec2{X: -10, Y: -10}).
+		LineTo(vec.Vec2{X: 10, Y: -10}).
+		LineTo(vec.Vec2{X: 10, Y: 10}).
+		LineTo(vec.Vec2{X: -10, Y: 10}).
+		Close()
+}
+
+// TestClipNegativeOrigin checks that a clip whose origin is negative bounds
+// the output on all four sides, and that every pixel inside it is reached.
+func TestClipNegativeOrigin(t *testing.T) {
+	clip := image.Rect(-4, -3, 4, 3)
+	square := clipTestSquare()
+
+	cases := []struct {
+		name string
+		run  func(r *Rasterizer, emit func(y, xMin int, cov []float32))
+	}{
+		{"fill", func(r *Rasterizer, emit func(y, xMin int, cov []float32)) {
+			r.FillNonZero(square.Iter(), emit)
+		}},
+		{"stroke", func(r *Rasterizer, emit func(y, xMin int, cov []float32)) {
+			r.Width = 40 // wide enough to cover the clip, hole included
+			r.Stroke(square.Iter(), emit)
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for thName, threshold := range thresholds {
+				t.Run(thName, func(t *testing.T) {
+					r := NewRasterizer(clip)
+					r.smallPathThreshold = threshold
+					covered := 0
+					tc.run(r, func(y, xMin int, cov []float32) {
+						if y < clip.Min.Y || y >= clip.Max.Y {
+							t.Errorf("row %d lies outside clip %v", y, clip)
+						}
+						if xMin < clip.Min.X || xMin+len(cov) > clip.Max.X {
+							t.Errorf("row %d spans [%d,%d), outside clip %v",
+								y, xMin, xMin+len(cov), clip)
+						}
+						for _, c := range cov {
+							if c > 0.5 {
+								covered++
+							}
+						}
+					})
+					if want := clip.Dx() * clip.Dy(); covered != want {
+						t.Errorf("covered %d pixels, want %d", covered, want)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestEmptyClip checks that an empty clip produces no output.  The last case
+// would underflow the Max-1 clamp if empty rectangles were not rejected first.
+func TestEmptyClip(t *testing.T) {
+	square := clipTestSquare()
+
+	clips := []image.Rectangle{
+		{},
+		image.Rect(5, 5, 5, 5),
+		{Min: image.Pt(10, 10), Max: image.Pt(4, 4)},
+		{Min: image.Pt(0, 0), Max: image.Pt(math.MinInt, math.MinInt)},
+	}
+
+	for _, clip := range clips {
+		t.Run(clip.String(), func(t *testing.T) {
+			r := NewRasterizer(clip)
+			emit := func(y, xMin int, cov []float32) {
+				t.Errorf("emitted row %d for empty clip %v", y, clip)
+			}
+			r.FillNonZero(square.Iter(), emit)
+			r.Width = 4
+			r.Stroke(square.Iter(), emit)
+		})
+	}
+}
+
 // BenchmarkRasterizeAll measures steady-state performance by reusing a single
 // Rasterizer across all test cases. This tests buffer reuse with varying clip sizes.
 func BenchmarkRasterizeAll(b *testing.B) {
@@ -296,7 +374,7 @@ func BenchmarkRasterizeAll(b *testing.B) {
 	}
 
 	// Create rasterizer once, reuse across all iterations
-	r := NewRasterizer(rect.Rect{})
+	r := NewRasterizer(image.Rectangle{})
 
 	// No-op emit callback - we're measuring rasterization, not compositing
 	emit := func(y, xMin int, coverage []float32) {}
@@ -305,12 +383,7 @@ func BenchmarkRasterizeAll(b *testing.B) {
 	for b.Loop() {
 		for _, tc := range cases {
 			// Update clip for this test case
-			r.Clip = rect.Rect{
-				LLx: 0,
-				LLy: 0,
-				URx: float64(tc.Width),
-				URy: float64(tc.Height),
-			}
+			r.Clip = image.Rect(0, 0, tc.Width, tc.Height)
 
 			// Apply CTM
 			if tc.CTM != (matrix.Matrix{}) {

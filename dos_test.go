@@ -17,12 +17,12 @@
 package raster
 
 import (
+	"image"
 	"math"
 	"testing"
 
 	"seehuhn.de/go/geom/matrix"
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/geom/rect"
 	"seehuhn.de/go/geom/vec"
 )
 
@@ -30,7 +30,7 @@ import (
 // unbounded number of segments.
 
 func TestFlattenCubicSegmentCap(t *testing.T) {
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.CTM = matrix.Matrix{1e10, 0, 0, 1e10, 0, 0}
 
 	count := 0
@@ -47,7 +47,7 @@ func TestFlattenCubicSegmentCap(t *testing.T) {
 }
 
 func TestFlattenQuadraticSegmentCap(t *testing.T) {
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.CTM = matrix.Matrix{1e10, 0, 0, 1e10, 0, 0}
 
 	count := 0
@@ -63,7 +63,7 @@ func TestFlattenQuadraticSegmentCap(t *testing.T) {
 }
 
 func TestArcSegmentCap(t *testing.T) {
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.CTM = matrix.Matrix{1e10, 0, 0, 1e10, 0, 0}
 	r.Width = 1
 
@@ -77,7 +77,7 @@ func TestArcSegmentCap(t *testing.T) {
 // The cap must not perturb flattening at ordinary scales.
 
 func TestFlattenNormalScaleUnaffected(t *testing.T) {
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.CTM = matrix.Identity
 
 	count := 0
@@ -105,7 +105,7 @@ func TestFillExtremeCTM(t *testing.T) {
 
 	scales := []float64{1e18, 1e150, 1e300, math.Inf(1), math.NaN()}
 	for _, s := range scales {
-		r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+		r := NewRasterizer(image.Rect(0, 0, 100, 100))
 		r.CTM = matrix.Matrix{s, 0, 0, s, 0, 0}
 		// must complete without panic or hang
 		r.FillNonZero(pth, func(y, xMin int, coverage []float32) {})
@@ -125,7 +125,7 @@ func TestStrokeExtremeCTM(t *testing.T) {
 
 	scales := []float64{1e18, 1e150, 1e300, math.Inf(1), math.NaN()}
 	for _, s := range scales {
-		r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+		r := NewRasterizer(image.Rect(0, 0, 100, 100))
 		r.CTM = matrix.Matrix{s, 0, 0, s, 0, 0}
 		r.Width = 1
 		// must complete without panic or hang
@@ -141,7 +141,7 @@ func TestDashSegmentCap(t *testing.T) {
 	p.MoveTo(vec.Vec2{X: 0, Y: 0})
 	p.LineTo(vec.Vec2{X: 1e6, Y: 0})
 
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.Width = 1
 	r.Dash = []float64{0.001}
 	// must complete without hanging
@@ -165,7 +165,7 @@ func TestDashZeroPaddedCap(t *testing.T) {
 	p.MoveTo(vec.Vec2{X: 0, Y: 0})
 	p.LineTo(vec.Vec2{X: 327000, Y: 0})
 
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.Width = 1
 	r.Dash = dash
 	// must complete without hanging
@@ -183,7 +183,7 @@ func TestDashNormalUnaffected(t *testing.T) {
 	p.MoveTo(vec.Vec2{X: 0, Y: 0})
 	p.LineTo(vec.Vec2{X: 50, Y: 0})
 
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.Width = 1
 	r.Dash = []float64{5, 3}
 	r.Stroke(p.Iter(), func(y, xMin int, coverage []float32) {})
@@ -201,7 +201,7 @@ func TestDashLongSparseUnaffected(t *testing.T) {
 	p.MoveTo(vec.Vec2{X: 0, Y: 0})
 	p.LineTo(vec.Vec2{X: 70000, Y: 0})
 
-	r := NewRasterizer(rect.Rect{LLx: 0, LLy: 0, URx: 100, URy: 100})
+	r := NewRasterizer(image.Rect(0, 0, 100, 100))
 	r.Width = 1
 	r.Dash = []float64{1, 99} // ~700 dashes, far below the cap
 	r.Stroke(p.Iter(), func(y, xMin int, coverage []float32) {})

@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	golang.org/x/image v0.44.0
-	seehuhn.de/go/geom v0.7.4
+	seehuhn.de/go/geom v0.7.5-0.20260830195243-64cdc9580785
 	seehuhn.de/go/pdf v0.7.5-0.20260718205142-fefe66a6a94d
 )
 

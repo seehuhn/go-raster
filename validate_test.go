@@ -17,10 +17,10 @@
 package raster
 
 import (
+	"image"
 	"testing"
 
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/geom/rect"
 	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/pdf/graphics"
 )
@@ -45,7 +45,7 @@ func TestPanicOnInvalidFlatness(t *testing.T) {
 		LineTo(vec.Vec2{X: 10, Y: 0}).
 		LineTo(vec.Vec2{X: 10, Y: 10}).
 		Close()
-	clip := rect.Rect{LLx: 0, LLy: 0, URx: 20, URy: 20}
+	clip := image.Rect(0, 0, 20, 20)
 	emit := func(y, xMin int, coverage []float32) {}
 
 	for _, flatness := range []float64{0, -1} {
@@ -67,7 +67,7 @@ func TestPanicOnInvalidWidth(t *testing.T) {
 	p := (&path.Data{}).
 		MoveTo(vec.Vec2{X: 0, Y: 0}).
 		LineTo(vec.Vec2{X: 10, Y: 10})
-	clip := rect.Rect{LLx: 0, LLy: 0, URx: 20, URy: 20}
+	clip := image.Rect(0, 0, 20, 20)
 	emit := func(y, xMin int, coverage []float32) {}
 
 	for _, width := range []float64{0, -1} {
@@ -133,7 +133,7 @@ func FuzzRasterize(f *testing.F) {
 	f.Add([]byte{0, 50, 50, 3, 100, 0, 0, 100, 200, 200})
 	f.Add([]byte{0, 30, 30, 1, 30, 30, 2, 100, 100, 200, 30})
 
-	clip := rect.Rect{LLx: 0, LLy: 0, URx: 200, URy: 200}
+	clip := image.Rect(0, 0, 200, 200)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		p := buildFuzzPath(data)

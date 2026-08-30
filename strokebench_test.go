@@ -17,11 +17,11 @@
 package raster
 
 import (
+	"image"
 	"math"
 	"testing"
 
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/geom/rect"
 	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/pdf/graphics"
 )
@@ -89,7 +89,7 @@ func makeSpiral(turns int, cx, cy float64) *path.Data {
 // rasterizer before timing starts.
 func benchStroke(b *testing.B, p *path.Data, setup func(r *Rasterizer)) {
 	const size = 500
-	clip := rect.Rect{LLx: 0, LLy: 0, URx: size, URy: size}
+	clip := image.Rect(0, 0, size, size)
 	r := NewRasterizer(clip)
 	r.Width = 4
 	if setup != nil {

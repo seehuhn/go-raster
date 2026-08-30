@@ -18,12 +18,12 @@ package raster
 
 import (
 	"fmt"
+	"image"
 	"math"
 	"math/rand"
 	"testing"
 
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/geom/rect"
 	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/pdf/graphics"
 )
@@ -59,7 +59,7 @@ func checkStrokeCoverage(t *testing.T, label string, pts []vec.Vec2, closed bool
 		p.Close()
 	}
 
-	r := NewRasterizer(rect.Rect{URx: size, URy: size})
+	r := NewRasterizer(image.Rect(0, 0, size, size))
 	r.Width = width
 	r.Join = graphics.LineJoinRound
 	r.Cap = graphics.LineCapRound
@@ -231,7 +231,7 @@ func TestDotWindingUnderOverlap(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := NewRasterizer(rect.Rect{URx: size, URy: size})
+			r := NewRasterizer(image.Rect(0, 0, size, size))
 			r.Width = 10
 			r.Cap = graphics.LineCapRound
 			r.Join = graphics.LineJoinRound

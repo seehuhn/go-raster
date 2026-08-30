@@ -22,7 +22,7 @@ go get seehuhn.de/go/raster
 ## Usage
 
 ```go
-clip := rect.Rect{XMin: 0, YMin: 0, XMax: 100, YMax: 100}
+clip := image.Rect(0, 0, 100, 100)
 r := raster.NewRasterizer(clip)
 
 r.CTM = matrix.Scale(2, 2) // optional transform

@@ -17,38 +17,32 @@
 package raster
 
 import (
+	"image"
 	"math"
 	"slices"
 
 	"seehuhn.de/go/geom/matrix"
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/geom/rect"
 	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/pdf/graphics"
 )
 
-// edge represents a line segment in device coordinates.
-type edge struct {
-	x0, y0 float64 // start point
-	x1, y1 float64 // end point
-	dxdy   float64 // (x1-x0)/(y1-y0), precomputed for x-intercept calculation
-	ymin   float64 // min(y0, y1), precomputed for scanline bucketing
-}
-
-// Rasterizer converts vector paths to pixel coverage values—the fraction of
-// each pixel's area covered by the filled/stroked path, ranging from 0
-// (outside) to 1 (inside). Create one instance and reuse it for multiple
-// paths. Internal buffers grow as needed but never shrink, achieving zero
-// allocations in steady state.
+// Rasterizer converts vector paths to pixel coverage fractions. Coverage
+// fractions are represented by float32 values in the range from 0 (outside) to
+// 1 (inside).
+//
+// All exported fields are user-settable graphics parameters. Drawing
+// operations are adjusted by setting these fields before calling one of the
+// drawing methods.
 //
 // A Rasterizer is not safe for concurrent use.
 type Rasterizer struct {
 	// CTM transforms from user space to device space. Must be non-singular.
 	CTM matrix.Matrix
 
-	// Clip bounds output to this device-coordinate rectangle.
-	// Coordinates must be integer-aligned.
-	Clip rect.Rect
+	// Clip bounds output to this half-open rectangle of device pixels.
+	// If the rectangle is empty or not well-formed it produces no output.
+	Clip image.Rectangle
 
 	// Flatness controls curve approximation accuracy in device pixels.
 	// Typical values: 0.25–1.0. Must be positive.
@@ -108,11 +102,17 @@ type Rasterizer struct {
 	// Dash pattern output buffers
 	dashedSegs        []strokeSegment // all dashed segments, contiguous
 	dashedSegsOffsets []int           // start index of each dashed subpath
+	dashedClosed      []bool          // whether each dashed subpath is closed
+
+	// ctmSigmaMax is the largest singular value of CTM's linear part,
+	// computed once per Stroke call and used to bound device-space scaling
+	// for join folding and arc segment counts.
+	ctmSigmaMax float64
 }
 
 // NewRasterizer returns a Rasterizer with the given clip rectangle and
 // PDF default values for other parameters.
-func NewRasterizer(clip rect.Rect) *Rasterizer {
+func NewRasterizer(clip image.Rectangle) *Rasterizer {
 	return &Rasterizer{
 		CTM:        matrix.Identity,
 		Clip:       clip,
@@ -231,6 +231,9 @@ func (r *Rasterizer) fill(p path.Path, rule fillRule, emit func(y, xMin int, cov
 	if r.Flatness <= 0 {
 		panic("raster: Flatness must be positive")
 	}
+	if r.Clip.Empty() {
+		return // skip flattening and edge collection when nothing can be emitted
+	}
 
 	// Collect edges from path (returns bounding box clamped to clip)
 	xMin, xMax, yMin, yMax, ok := r.collectPathEdges(p)
@@ -238,7 +241,13 @@ func (r *Rasterizer) fill(p path.Path, rule fillRule, emit func(y, xMin int, cov
 		return // empty or degenerate path
 	}
 
-	// Choose approach based on bounding box size
+	r.rasterizeEdges(xMin, xMax, yMin, yMax, rule, emit)
+}
+
+// rasterizeEdges rasterises the edges collected in r.edges within the given
+// bounding box, choosing the small-path (2D buffer) or large-path (active
+// edge list) approach by its pixel area.
+func (r *Rasterizer) rasterizeEdges(xMin, xMax, yMin, yMax int, rule fillRule, emit func(y, xMin int, coverage []float32)) {
 	width := xMax - xMin
 	height := yMax - yMin
 
@@ -301,25 +310,26 @@ func (r *Rasterizer) collectPathEdges(p path.Path) (xMin, xMax, yMin, yMax int, 
 		return 0, 0, 0, 0, false
 	}
 
-	// a non-finite CTM yields NaN extremes; treat the path as degenerate
-	if math.IsNaN(r.edgeDevXMin) || math.IsNaN(r.edgeDevXMax) ||
-		math.IsNaN(r.edgeDevYMin) || math.IsNaN(r.edgeDevYMax) {
+	return r.clippedEdgeBounds()
+}
+
+// clippedEdgeBounds converts the device-space bounding box accumulated by
+// addEdge into a half-open pixel rectangle clamped to Clip.  ok is false if
+// nothing is left to rasterise.
+func (r *Rasterizer) clippedEdgeBounds() (xMin, xMax, yMin, yMax int, ok bool) {
+	// An empty clip admits no pixels.  Returning early also keeps the Max-1
+	// below from underflowing, since a non-empty rectangle has Max > Min.
+	if r.Clip.Empty() {
 		return 0, 0, 0, 0, false
 	}
 
-	// clamp to clip bounds and convert to integers
-	clipXMin := int(r.Clip.LLx)
-	clipXMax := int(r.Clip.URx)
-	clipYMin := int(r.Clip.LLy)
-	clipYMax := int(r.Clip.URy)
-
 	// The +1 turns the inclusive max pixel into an exclusive upper bound.
-	// Clamping to clipMax-1 first keeps that +1 within the int range even when
+	// Clamping to Max-1 first keeps that +1 within the int range even when
 	// floorToInt saturates on an extreme CTM.
-	xMin = max(floorToInt(r.edgeDevXMin), clipXMin)
-	xMax = min(floorToInt(r.edgeDevXMax), clipXMax-1) + 1
-	yMin = max(floorToInt(r.edgeDevYMin), clipYMin)
-	yMax = min(floorToInt(r.edgeDevYMax), clipYMax-1) + 1
+	xMin = max(floorToInt(r.edgeDevXMin), r.Clip.Min.X)
+	xMax = min(floorToInt(r.edgeDevXMax), r.Clip.Max.X-1) + 1
+	yMin = max(floorToInt(r.edgeDevYMin), r.Clip.Min.Y)
+	yMax = min(floorToInt(r.edgeDevYMax), r.Clip.Max.Y-1) + 1
 
 	if xMin >= xMax || yMin >= yMax {
 		return 0, 0, 0, 0, false
@@ -328,50 +338,63 @@ func (r *Rasterizer) collectPathEdges(p path.Path) (xMin, xMax, yMin, yMax int, 
 	return xMin, xMax, yMin, yMax, true
 }
 
-// addEdge adds an edge from user space coordinates, transforming to device space.
-func (r *Rasterizer) addEdge(p0, p1 vec.Vec2) {
-	// Transform to device space
-	dx0 := r.CTM[0]*p0.X + r.CTM[2]*p0.Y + r.CTM[4]
-	dy0 := r.CTM[1]*p0.X + r.CTM[3]*p0.Y + r.CTM[5]
-	dx1 := r.CTM[0]*p1.X + r.CTM[2]*p1.Y + r.CTM[4]
-	dy1 := r.CTM[1]*p1.X + r.CTM[3]*p1.Y + r.CTM[5]
-
-	// Skip horizontal edges
-	dy := dy1 - dy0
-	if dy > -horizontalEdgeThreshold && dy < horizontalEdgeThreshold {
-		return
+// nonZeroCoverage converts a raw winding value to coverage under the
+// nonzero winding rule.
+func nonZeroCoverage(raw float32) float32 {
+	if raw < 0 {
+		raw = -raw
 	}
+	return min(raw, 1)
+}
 
-	// Compute dxdy
-	dxdy := (dx1 - dx0) / dy
-
-	r.edges = append(r.edges, edge{
-		x0: dx0, y0: dy0,
-		x1: dx1, y1: dy1,
-		dxdy: dxdy,
-		ymin: min(dy0, dy1),
-	})
-
-	// Update bounding box
-	if r.edgeBBoxFirst {
-		r.edgeDevXMin = min(dx0, dx1)
-		r.edgeDevXMax = max(dx0, dx1)
-		r.edgeDevYMin = min(dy0, dy1)
-		r.edgeDevYMax = max(dy0, dy1)
-		r.edgeBBoxFirst = false
-	} else {
-		r.edgeDevXMin = min(r.edgeDevXMin, min(dx0, dx1))
-		r.edgeDevXMax = max(r.edgeDevXMax, max(dx0, dx1))
-		r.edgeDevYMin = min(r.edgeDevYMin, min(dy0, dy1))
-		r.edgeDevYMax = max(r.edgeDevYMax, max(dy0, dy1))
+// evenOddCoverage converts a raw winding value to coverage under the
+// even-odd rule.
+func evenOddCoverage(raw float32) float32 {
+	// 1 - |1 - mod(|raw|, 2)|, which for |raw| ≤ 1 is just |raw|
+	if raw < 0 {
+		raw = -raw
 	}
+	if raw <= 1 {
+		return raw
+	}
+	mod := raw - 2*float32(int(raw/2))
+	return 1 - abs32(1-mod)
+}
+
+// integrateScanlineNonZero converts accumulated cover/area to final coverage
+// values using the nonzero winding rule. The cover slice is modified in
+// place.  The return value is the winding carried past the end of the slice.
+func integrateScanlineNonZero(cover, area []float32) float32 {
+	area = area[:len(cover)] // bounds check elimination hint
+	var accum float32
+	for i := range cover {
+		raw := accum + area[i]
+		accum += cover[i]
+		cover[i] = nonZeroCoverage(raw)
+	}
+	return accum
+}
+
+// integrateScanlineEvenOdd converts accumulated cover/area to final coverage
+// values using the even-odd fill rule. The cover slice is modified in place.
+// The return value is the winding carried past the end of the slice.
+func integrateScanlineEvenOdd(cover, area []float32) float32 {
+	area = area[:len(cover)] // bounds check elimination hint
+	var accum float32
+	for i := range cover {
+		raw := accum + area[i]
+		accum += cover[i]
+		cover[i] = evenOddCoverage(raw)
+	}
+	return accum
 }
 
 // floorToInt floors f and converts it to int, saturating values outside the
-// int range to the int extremes. This keeps the device-space bounding box
-// well-defined even when an extreme CTM produces coordinates beyond MaxInt;
-// the caller clamps the result to the clip bounds. NaN is not expected here
-// (collectPathEdges rejects non-finite extremes first) and maps to zero.
+// int range to the int extremes and mapping NaN to zero.  Edges are clipped
+// to the clip rectangle, so saturation only matters for clips near the int
+// extremes.  NaN should not reach here, but Go leaves int(math.Floor(NaN))
+// implementation-defined -- it is 0 on arm64 and MinInt on amd64 -- so the
+// result is pinned to keep rendering architecture-independent.
 func floorToInt(f float64) int {
 	switch {
 	case math.IsNaN(f):
@@ -382,188 +405,6 @@ func floorToInt(f float64) int {
 		return math.MaxInt
 	default:
 		return int(math.Floor(f))
-	}
-}
-
-// Coverage accumulation model:
-//
-// For each pixel, we track two values:
-//   cover: signed vertical extent of edges crossing this pixel column
-//   area:  horizontal position weighting (how far right the crossing is)
-//
-// An edge crossing a pixel contributes:
-//   cover = sign * dy   (where sign is +1 for downward, -1 for upward)
-//   area  = cover * (1 - xFrac)   (where xFrac is the horizontal position within the pixel)
-//
-// Final coverage is computed by integrateScanline:
-//   pixel_coverage = accumulated_cover + area[i]
-//   accumulated_cover += cover[i]   (carry forward for next pixel)
-//
-// This computes the signed area of the path within each pixel, which gives
-// anti-aliased coverage values when clamped to [0,1] (nonzero) or folded (even-odd).
-
-// accumulateEdge adds a single edge's contribution to the cover and area buffers.
-// The buffers are indexed by (x - bboxXMin), where bboxXMin/bboxXMax define the buffer range.
-// For edges spanning multiple pixels horizontally, this function splits the edge at pixel
-// boundaries and computes separate contributions for each pixel crossed.
-func (r *Rasterizer) accumulateEdge(e *edge, y int, cover, area []float32, bboxXMin, bboxXMax int) {
-	// Compute the portion of the edge within this scanline [y, y+1)
-	yTop := float64(y)
-	yBot := float64(y + 1)
-
-	// Clamp to edge's actual y extent
-	edgeYMin := min(e.y0, e.y1)
-	edgeYMax := max(e.y0, e.y1)
-	yTop = max(yTop, edgeYMin)
-	yBot = min(yBot, edgeYMax)
-
-	if yBot <= yTop {
-		return
-	}
-
-	// Sign based on edge direction: +1 for downward (y1 > y0), -1 for upward
-	sign := float32(1)
-	if e.y1 < e.y0 {
-		sign = -1
-	}
-
-	// Compute x at the y boundaries of the edge segment within this scanline
-	xAtYTop := e.x0 + e.dxdy*(yTop-e.y0)
-	xAtYBot := e.x0 + e.dxdy*(yBot-e.y0)
-
-	// Determine pixel range the edge spans (ensure left <= right for iteration)
-	xLeft, xRight := xAtYTop, xAtYBot
-	if xLeft > xRight {
-		xLeft, xRight = xRight, xLeft
-	}
-
-	pixLeft := int(math.Floor(xLeft))
-	pixRight := int(math.Floor(xRight))
-
-	// Handle edge entirely to the left of bbox
-	if pixRight < bboxXMin {
-		coverVal := sign * float32(yBot-yTop)
-		cover[0] += coverVal
-		area[0] += coverVal
-		return
-	}
-
-	// Handle edge entirely to the right of bbox
-	if pixLeft >= bboxXMax {
-		return
-	}
-
-	// For vertical edges or edges within a single pixel column
-	if pixLeft == pixRight {
-		r.accumulateEdgeInColumn(e, yTop, yBot, sign, pixLeft, cover, area, bboxXMin, bboxXMax)
-		return
-	}
-
-	// Edge spans multiple pixels - process each pixel column in x-order
-	// For each pixel, compute the y-extent of the edge within that column
-	dydx := 1 / e.dxdy
-
-	for pix := pixLeft; pix <= pixRight; pix++ {
-		// Compute y at column boundaries
-		yAtPixLeft := e.y0 + dydx*(float64(pix)-e.x0)
-		yAtPixRight := e.y0 + dydx*(float64(pix+1)-e.x0)
-
-		// Clamp to edge's y-extent within scanline
-		segYMin := max(min(yAtPixLeft, yAtPixRight), yTop)
-		segYMax := min(max(yAtPixLeft, yAtPixRight), yBot)
-
-		segDy := segYMax - segYMin
-		if segDy <= 0 {
-			continue
-		}
-
-		// Compute contribution for this segment
-		coverVal := sign * float32(segDy)
-
-		// Compute average x within this pixel column
-		yMid := (segYMin + segYMax) / 2
-		xMid := e.x0 + e.dxdy*(yMid-e.y0)
-		xFrac := xMid - float64(pix)
-		areaVal := coverVal * float32(1-xFrac)
-
-		// Add to buffers
-		if pix < bboxXMin {
-			cover[0] += coverVal
-			area[0] += coverVal
-		} else if pix < bboxXMax {
-			idx := pix - bboxXMin
-			cover[idx] += coverVal
-			area[idx] += areaVal
-		}
-		// pix >= bboxXMax: no contribution
-	}
-}
-
-// accumulateEdgeInColumn handles an edge segment that falls within a single pixel column.
-func (r *Rasterizer) accumulateEdgeInColumn(e *edge, yTop, yBot float64, sign float32, pix int, cover, area []float32, bboxXMin, bboxXMax int) {
-	coverVal := sign * float32(yBot-yTop)
-
-	if pix < bboxXMin {
-		cover[0] += coverVal
-		area[0] += coverVal
-		return
-	}
-	if pix >= bboxXMax {
-		return
-	}
-
-	// Compute average x within this pixel
-	yMid := (yTop + yBot) / 2
-	xMid := e.x0 + e.dxdy*(yMid-e.y0)
-	xFrac := xMid - float64(pix)
-	areaVal := coverVal * float32(1-xFrac)
-
-	idx := pix - bboxXMin
-	cover[idx] += coverVal
-	area[idx] += areaVal
-}
-
-// integrateScanlineNonZero converts accumulated cover/area to final coverage
-// values using the nonzero winding rule. The cover slice is modified in place.
-func integrateScanlineNonZero(cover, area []float32) {
-	area = area[:len(cover)] // bounds check elimination hint
-	var accum float32
-	for i := range cover {
-		raw := accum + area[i]
-		accum += cover[i]
-
-		// clamp(abs(raw), 0, 1)
-		cov := raw
-		if raw < 0 {
-			cov = -raw
-		}
-		if cov > 1 {
-			cov = 1
-		}
-		cover[i] = cov
-	}
-}
-
-// integrateScanlineEvenOdd converts accumulated cover/area to final coverage
-// values using the even-odd fill rule. The cover slice is modified in place.
-func integrateScanlineEvenOdd(cover, area []float32) {
-	area = area[:len(cover)] // bounds check elimination hint
-	var accum float32
-	for i := range cover {
-		raw := accum + area[i]
-		accum += cover[i]
-
-		// even-odd: 1 - |1 - mod(|raw|, 2)|
-		// for |raw| ≤ 1 this simplifies to |raw|
-		if raw < 0 {
-			raw = -raw
-		}
-		if raw <= 1 {
-			cover[i] = raw
-			continue
-		}
-		mod := raw - 2*float32(int(raw/2))
-		cover[i] = 1 - abs32(1-mod)
 	}
 }
 
@@ -615,17 +456,10 @@ func (r *Rasterizer) fillSmallPath(xMin, xMax, yMin, yMax int, rule fillRule, em
 	for i := range r.edges {
 		e := &r.edges[i]
 
-		// Determine scanline range for this edge
-		var edgeYMin, edgeYMax int
-		if e.y0 < e.y1 {
-			edgeYMin = int(math.Floor(e.y0))
-			edgeYMax = int(math.Floor(e.y1)) + 1
-		} else {
-			edgeYMin = int(math.Floor(e.y1))
-			edgeYMax = int(math.Floor(e.y0)) + 1
-		}
-		edgeYMin = max(edgeYMin, yMin)
-		edgeYMax = min(edgeYMax, yMax)
+		// Determine scanline range for this edge.  Clamping before the +1
+		// keeps it in range, as in clippedEdgeBounds.
+		edgeYMin := max(floorToInt(e.ymin), yMin)
+		edgeYMax := min(floorToInt(e.ymax), yMax-1) + 1
 
 		// Accumulate into each scanline
 		for y := edgeYMin; y < edgeYMax; y++ {
@@ -666,9 +500,12 @@ func (r *Rasterizer) fillSmallPath(xMin, xMax, yMin, yMax int, rule fillRule, em
 func (r *Rasterizer) fillLargePath(xMin, xMax, yMin, yMax int, rule fillRule, emit func(y, xMin int, coverage []float32)) {
 	width := xMax - xMin
 
-	// Ensure 1D buffers are large enough
+	// Ensure 1D buffers are large enough and start out zero.  Each row
+	// clears only the part it wrote, so the buffers stay zero between rows.
 	r.cover = slices.Grow(r.cover[:0], width)[:width]
 	r.area = slices.Grow(r.area[:0], width)[:width]
+	clear(r.cover)
+	clear(r.area)
 
 	// Bucket edges by starting scanline. Order within a scanline does not
 	// matter: contributions are additive.
@@ -692,7 +529,6 @@ func (r *Rasterizer) fillLargePath(xMin, xMax, yMin, yMax int, rule fillRule, em
 	// Process scanlines
 	for y := yMin; y < yMax; y++ {
 		yf := float64(y)
-		yfNext := float64(y + 1)
 
 		// Add edges that start at this scanline
 		for idx := r.bucketHead[y-yMin]; idx >= 0; idx = r.bucketNext[idx] {
@@ -703,66 +539,64 @@ func (r *Rasterizer) fillLargePath(xMin, xMax, yMin, yMax int, rule fillRule, em
 			continue
 		}
 
-		// Clear buffers for this scanline
-		clear(r.cover)
-		clear(r.area)
-
-		// Track x bounds for this scanline
-		xMinBound := width
-		xMaxBound := -1
-
-		// Process active edges
+		// Process active edges, tracking the span of buffer cells written.
+		lo, hi := width, -1
 		for i := 0; i < len(r.activeIdx); {
 			e := &r.edges[r.activeIdx[i]]
 
 			// Check if edge ends before this scanline
-			edgeYMax := max(e.y0, e.y1)
-			if edgeYMax <= yf {
+			if e.ymax <= yf {
 				// Remove from active list (swap with last)
 				r.activeIdx[i] = r.activeIdx[len(r.activeIdx)-1]
 				r.activeIdx = r.activeIdx[:len(r.activeIdx)-1]
 				continue
 			}
 
-			// Accumulate contribution
-			r.accumulateEdge(e, y, r.cover, r.area, xMin, xMax)
-
-			// Update x bounds
-			yTop := max(yf, min(e.y0, e.y1))
-			yBot := min(yfNext, max(e.y0, e.y1))
-			if yBot > yTop {
-				yMid := (yTop + yBot) / 2
-				xMidF := e.x0 + e.dxdy*(yMid-e.y0)
-				x := int(math.Floor(xMidF))
-				x = max(x, xMin)
-				x = min(x, xMax-1)
-				xIdx := x - xMin
-				if xIdx < xMinBound {
-					xMinBound = xIdx
-				}
-				if xIdx > xMaxBound {
-					xMaxBound = xIdx
-				}
+			eLo, eHi := r.accumulateEdge(e, y, r.cover, r.area, xMin, xMax)
+			if eLo <= eHi {
+				lo = min(lo, eLo)
+				hi = max(hi, eHi)
 			}
 
 			i++
 		}
 
-		if xMaxBound < 0 {
+		if hi < 0 {
 			continue // no edges contributed to this scanline
 		}
 
-		// Integrate and emit
+		// Integrate the written span.  Winding carried past its end covers
+		// the rest of the row uniformly; a residual below coverEpsilon is
+		// float error from cancelling edges and counts as zero.
+		span := r.cover[lo : hi+1]
+		var carry float32
 		if rule == fillNonZero {
-			integrateScanlineNonZero(r.cover, r.area)
+			carry = integrateScanlineNonZero(span, r.area[lo:hi+1])
 		} else {
-			integrateScanlineEvenOdd(r.cover, r.area)
+			carry = integrateScanlineEvenOdd(span, r.area[lo:hi+1])
+		}
+		end := hi + 1
+		if carry > coverEpsilon || carry < -coverEpsilon {
+			var tail float32
+			if rule == fillNonZero {
+				tail = nonZeroCoverage(carry)
+			} else {
+				tail = evenOddCoverage(carry)
+			}
+			end = width
+			for i := hi + 1; i < end; i++ {
+				r.cover[i] = tail
+			}
 		}
 
 		// Emit only the non-zero portion
-		if trimmed, offset := trimZeros(r.cover); trimmed != nil {
-			emit(y, xMin+offset, trimmed)
+		if trimmed, offset := trimZeros(r.cover[lo:end]); trimmed != nil {
+			emit(y, xMin+lo+offset, trimmed)
 		}
+
+		// restore the zero state for the next row
+		clear(r.cover[lo:end])
+		clear(r.area[lo : hi+1])
 	}
 }
 
@@ -795,6 +629,11 @@ const (
 	// zeroLengthThreshold is the minimum length for a stroke segment.
 	// Segments shorter than this are skipped.
 	zeroLengthThreshold = 1e-10
+
+	// coverEpsilon is the winding residual below which a row's carried-over
+	// winding counts as zero.  The covers of the edges crossing a row cancel
+	// exactly for a closed path, up to float32 rounding.
+	coverEpsilon = 1e-6
 
 	// collinearityThreshold is the turn angle below which segments count as
 	// collinear and no join is needed.
