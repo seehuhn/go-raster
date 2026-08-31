@@ -116,7 +116,7 @@ func NewRasterizer(clip image.Rectangle) *Rasterizer {
 	return &Rasterizer{
 		CTM:        matrix.Identity,
 		Clip:       clip,
-		Flatness:   defaultFlatness,
+		Flatness:   DefaultFlatness,
 		Width:      1.0,
 		Cap:        graphics.LineCapButt,
 		Join:       graphics.LineJoinMiter,
@@ -602,10 +602,10 @@ func (r *Rasterizer) fillLargePath(xMin, xMax, yMin, yMax int, rule fillRule, em
 
 // Default values for rasterizer parameters.
 const (
-	// defaultFlatness is the default curve flattening tolerance in device
-	// pixels. Values of 0.25-1.0 are typical; 0.25 is below the threshold
-	// of visual perception.
-	defaultFlatness = 0.25
+	// DefaultFlatness is the curve flattening tolerance a new Rasterizer
+	// starts with, in device pixels. Values of 0.25-1.0 are typical; 0.25 is
+	// below the threshold of visual perception.
+	DefaultFlatness = 0.25
 
 	// defaultMiterLimit is the default miter limit, matching PDF/PostScript.
 	// This converts joins to bevels when the interior angle is less than
