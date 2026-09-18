@@ -120,7 +120,7 @@ func NewRasterizer(clip image.Rectangle) *Rasterizer {
 		Width:      1.0,
 		Cap:        graphics.LineCapButt,
 		Join:       graphics.LineJoinMiter,
-		MiterLimit: defaultMiterLimit,
+		MiterLimit: graphics.DefaultMiterLimit,
 
 		smallPathThreshold: smallPathThreshold,
 	}
@@ -606,11 +606,6 @@ const (
 	// starts with, in device pixels. Values of 0.25-1.0 are typical; 0.25 is
 	// below the threshold of visual perception.
 	DefaultFlatness = 0.25
-
-	// defaultMiterLimit is the default miter limit, matching PDF/PostScript.
-	// This converts joins to bevels when the interior angle is less than
-	// approximately 11.5 degrees.
-	defaultMiterLimit = 10.0
 )
 
 // Numerical tolerances for the rasterizer.

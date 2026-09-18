@@ -20,6 +20,7 @@ import (
 	"math"
 	"slices"
 
+	"seehuhn.de/go/geom/linalg"
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
 	"seehuhn.de/go/pdf/graphics"
@@ -427,21 +428,18 @@ func (r *Rasterizer) addJoinPiece(P, T1, T2 vec.Vec2, d float64) {
 
 	switch r.Join {
 	case graphics.LineJoinMiter:
-		// miterLength = 1/sin(φ/2), where φ = 180° - θ is the interior angle at
-		// the corner, so sin(φ/2) = cos(θ/2) = sqrt((1 + cosθ)/2).
-		sinHalf := math.Sqrt((1 + cosTheta) / 2)
-		const miterEpsilon = 1e-10
-		if sinHalf > 0 && 1/sinHalf <= r.MiterLimit+miterEpsilon {
+		if length, ok := linalg.MiterLength(T1, T2, 2*d, r.MiterLimit); ok {
 			bisector := n1.Add(n2)
 			if bisectorLen := bisector.Length(); bisectorLen > zeroLengthThreshold {
-				tip := P.Add(bisector.Mul(d / (sinHalf * bisectorLen)))
+				tip := P.Add(bisector.Mul(length / bisectorLen))
 				start := r.beginPiece()
 				r.stroke = append(r.stroke, P, P.Add(from.Mul(d)), tip, P.Add(to.Mul(d)))
 				r.endPiece(start)
 				return
 			}
 		}
-		// miter limit exceeded, fall back to a bevel
+		// the miter is longer than the limit allows, or the corner leaves no
+		// bisector to put its tip on: fall back to a bevel
 		fallthrough
 
 	case graphics.LineJoinBevel:
