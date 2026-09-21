@@ -24,7 +24,6 @@ import (
 	"seehuhn.de/go/geom/matrix"
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // Rasterizer converts vector paths to pixel coverage fractions. Coverage
@@ -53,10 +52,10 @@ type Rasterizer struct {
 	Width float64
 
 	// Cap sets the style for stroke endpoints (butt, round, or square).
-	Cap graphics.LineCapStyle
+	Cap path.CapStyle
 
 	// Join sets the style for stroke corners (miter, round, or bevel).
-	Join graphics.LineJoinStyle
+	Join path.JoinStyle
 
 	// MiterLimit caps miter join length. Must be at least 1.0.
 	MiterLimit float64
@@ -118,9 +117,9 @@ func NewRasterizer(clip image.Rectangle) *Rasterizer {
 		Clip:       clip,
 		Flatness:   DefaultFlatness,
 		Width:      1.0,
-		Cap:        graphics.LineCapButt,
-		Join:       graphics.LineJoinMiter,
-		MiterLimit: graphics.DefaultMiterLimit,
+		Cap:        path.CapButt,
+		Join:       path.JoinMiter,
+		MiterLimit: path.DefaultMiterLimit,
 
 		smallPathThreshold: smallPathThreshold,
 	}

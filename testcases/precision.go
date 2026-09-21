@@ -18,7 +18,6 @@ package testcases
 
 import (
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 var precisionCases = []TestCase{
@@ -58,8 +57,8 @@ var precisionCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      1.0,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 		},
 	},
@@ -70,8 +69,8 @@ var precisionCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      1.0,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 		},
 	},

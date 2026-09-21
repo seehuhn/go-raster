@@ -18,7 +18,6 @@ package testcases
 
 import (
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // kappa for cubic Bezier approximation of a quarter circle
@@ -84,8 +83,8 @@ var curveCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},
@@ -140,8 +139,8 @@ var curveCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},
@@ -152,8 +151,8 @@ var curveCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},
@@ -166,8 +165,8 @@ var curveCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      3,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapButt,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},

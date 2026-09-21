@@ -23,7 +23,6 @@ import (
 
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // appendSquare adds a closed square subpath with corner (x, y) and side s.
@@ -74,8 +73,8 @@ func TestDashClosedWrapSubpaths(t *testing.T) {
 	setup := func() *Rasterizer {
 		r := NewRasterizer(image.Rect(0, 0, 100, 100))
 		r.Width = 4
-		r.Cap = graphics.LineCapSquare
-		r.Join = graphics.LineJoinRound
+		r.Cap = path.CapSquare
+		r.Join = path.JoinRound
 		r.Dash = []float64{25, 5}
 		r.DashPhase = 10 // the last dash runs on through the start point
 		return r

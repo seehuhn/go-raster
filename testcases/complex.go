@@ -20,7 +20,6 @@ import (
 	"math"
 
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 var complexCases = []TestCase{
@@ -39,8 +38,8 @@ var complexCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      3,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},
@@ -60,8 +59,8 @@ var complexCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},
@@ -72,8 +71,8 @@ var complexCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},
@@ -84,8 +83,8 @@ var complexCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      10,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},
@@ -96,8 +95,8 @@ var complexCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      8,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 	},

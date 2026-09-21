@@ -23,7 +23,6 @@ import (
 
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // sink prevents the emit callback from being optimised away.
@@ -116,23 +115,23 @@ func BenchmarkStroke(b *testing.B) {
 		setup func(r *Rasterizer)
 	}{
 		{"wave/round", wave, func(r *Rasterizer) {
-			r.Cap = graphics.LineCapRound
-			r.Join = graphics.LineJoinRound
+			r.Cap = path.CapRound
+			r.Join = path.JoinRound
 		}},
 		{"wave/miter", wave, nil},
 		{"wave/thick", wave, func(r *Rasterizer) { r.Width = 20 }},
 		{"zigzag/miter", zig, nil},
 		{"zigzag/round", zig, func(r *Rasterizer) {
-			r.Cap = graphics.LineCapRound
-			r.Join = graphics.LineJoinRound
+			r.Cap = path.CapRound
+			r.Join = path.JoinRound
 		}},
 		{"spiral/round", spiral, func(r *Rasterizer) {
-			r.Cap = graphics.LineCapRound
-			r.Join = graphics.LineJoinRound
+			r.Cap = path.CapRound
+			r.Join = path.JoinRound
 		}},
 		{"wave/dashed", wave, func(r *Rasterizer) {
 			r.Dash = []float64{8, 4}
-			r.Cap = graphics.LineCapRound
+			r.Cap = path.CapRound
 		}},
 	}
 	for _, c := range cases {

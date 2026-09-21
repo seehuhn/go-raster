@@ -25,7 +25,6 @@ import (
 
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // distToSegment returns the distance from p to the segment ab.
@@ -61,8 +60,8 @@ func checkStrokeCoverage(t *testing.T, label string, pts []vec.Vec2, closed bool
 
 	r := NewRasterizer(image.Rect(0, 0, size, size))
 	r.Width = width
-	r.Join = graphics.LineJoinRound
-	r.Cap = graphics.LineCapRound
+	r.Join = path.JoinRound
+	r.Cap = path.CapRound
 	r.MiterLimit = 10
 
 	covered := make([]bool, size*size)
@@ -233,8 +232,8 @@ func TestDotWindingUnderOverlap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := NewRasterizer(image.Rect(0, 0, size, size))
 			r.Width = 10
-			r.Cap = graphics.LineCapRound
-			r.Join = graphics.LineJoinRound
+			r.Cap = path.CapRound
+			r.Join = path.JoinRound
 			r.MiterLimit = 10
 			r.Dash = tc.dash
 

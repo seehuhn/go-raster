@@ -20,7 +20,6 @@ import (
 	"seehuhn.de/go/geom/matrix"
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // TestCase defines a single rendering test.
@@ -55,12 +54,12 @@ func (Fill) isOperation() {}
 
 // Stroke specifies a stroke operation.
 type Stroke struct {
-	Width      float64                // line width (>0)
-	Cap        graphics.LineCapStyle  // LineCapButt, LineCapRound, LineCapSquare
-	Join       graphics.LineJoinStyle // LineJoinMiter, LineJoinRound, LineJoinBevel
-	MiterLimit float64                // miter limit
-	Dash       []float64              // dash pattern (nil for solid)
-	DashPhase  float64                // dash phase offset
+	Width      float64        // line width (>0)
+	Cap        path.CapStyle  // CapButt, CapRound, CapSquare
+	Join       path.JoinStyle // JoinMiter, JoinRound, JoinBevel
+	MiterLimit float64        // miter limit
+	Dash       []float64      // dash pattern (nil for solid)
+	DashPhase  float64        // dash phase offset
 }
 
 func (Stroke) isOperation() {}

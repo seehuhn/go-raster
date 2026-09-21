@@ -23,7 +23,6 @@ import (
 	"seehuhn.de/go/geom/linalg"
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // Stroke renders the path as a stroked outline using Width, Cap, Join,
@@ -57,7 +56,7 @@ func (r *Rasterizer) Stroke(p path.Path, emit func(y, xMin int, coverage []float
 	r.strokeOffsets = r.strokeOffsets[:0]
 
 	// Handle degenerate subpaths (no orientation): only round cap produces circle
-	if r.Cap == graphics.LineCapRound {
+	if r.Cap == path.CapRound {
 		for _, pt := range r.degeneratePoints {
 			start := r.beginPiece()
 			// negative sweep, so the circle winds clockwise like every other piece
@@ -123,10 +122,10 @@ func (r *Rasterizer) strokeDashedSubpaths() {
 			seg := &segs[0]
 			start := r.beginPiece()
 			switch r.Cap {
-			case graphics.LineCapRound:
+			case path.CapRound:
 				// negative sweep, so the circle winds clockwise like every other piece
 				r.addArc(seg.A, r.Width/2, vec.Vec2{X: 1, Y: 0}, -2*math.Pi)
-			case graphics.LineCapSquare:
+			case path.CapSquare:
 				r.addSquare(seg.A, seg.T, r.Width/2)
 			}
 			// Butt cap: no output
@@ -427,7 +426,7 @@ func (r *Rasterizer) addJoinPiece(P, T1, T2 vec.Vec2, d float64) {
 	}
 
 	switch r.Join {
-	case graphics.LineJoinMiter:
+	case path.JoinMiter:
 		if length, ok := linalg.MiterLength(T1, T2, 2*d, r.MiterLimit); ok {
 			bisector := n1.Add(n2)
 			if bisectorLen := bisector.Length(); bisectorLen > zeroLengthThreshold {
@@ -442,12 +441,12 @@ func (r *Rasterizer) addJoinPiece(P, T1, T2 vec.Vec2, d float64) {
 		// bisector to put its tip on: fall back to a bevel
 		fallthrough
 
-	case graphics.LineJoinBevel:
+	case path.JoinBevel:
 		start := r.beginPiece()
 		r.stroke = append(r.stroke, P, P.Add(from.Mul(d)), P.Add(to.Mul(d)))
 		r.endPiece(start)
 
-	case graphics.LineJoinRound:
+	case path.JoinRound:
 		start := r.beginPiece()
 		r.stroke = append(r.stroke, P)
 		r.addArc(P, d, from, sweep)
@@ -462,10 +461,10 @@ func (r *Rasterizer) addCapPiece(P, T vec.Vec2, d float64) {
 	N := vec.Vec2{X: -T.Y, Y: T.X} // normal (90° CCW from T)
 
 	switch r.Cap {
-	case graphics.LineCapButt:
+	case path.CapButt:
 		// nothing to add: the segment quadrilateral already ends flush
 
-	case graphics.LineCapSquare:
+	case path.CapSquare:
 		ext := T.Mul(d)
 		start := r.beginPiece()
 		r.stroke = append(r.stroke,
@@ -473,7 +472,7 @@ func (r *Rasterizer) addCapPiece(P, T vec.Vec2, d float64) {
 			P.Sub(N.Mul(d)).Add(ext), P.Sub(N.Mul(d)))
 		r.endPiece(start)
 
-	case graphics.LineCapRound:
+	case path.CapRound:
 		// semicircle from +N clockwise through T to -N
 		start := r.beginPiece()
 		r.addArc(P, d, N, -math.Pi)

@@ -21,7 +21,6 @@ import (
 
 	"seehuhn.de/go/geom/matrix"
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 var ctmCases = []TestCase{
@@ -150,8 +149,8 @@ var ctmCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      8,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 		// Non-uniform scale: round caps should become elliptical in device space
@@ -164,8 +163,8 @@ var ctmCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      6,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapButt,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 		},
 		CTM: matrix.RotateDeg(30).Translate(32, 32),
@@ -177,8 +176,8 @@ var ctmCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{5, 3},
 			DashPhase:  0,

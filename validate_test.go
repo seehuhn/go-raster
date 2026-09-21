@@ -22,7 +22,6 @@ import (
 
 	"seehuhn.de/go/geom/path"
 	"seehuhn.de/go/geom/vec"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 // mustPanic runs fn and fails the test unless fn panics.
@@ -153,14 +152,14 @@ func FuzzRasterize(f *testing.F) {
 
 		// stroke with a few parameter combinations derived from the input
 		var width float64 = 1
-		var capStyle graphics.LineCapStyle
-		var joinStyle graphics.LineJoinStyle
+		var capStyle path.CapStyle
+		var joinStyle path.JoinStyle
 		var dash []float64
 		var phase float64
 		if len(data) > 0 {
 			width = float64(data[0])/255*20 + 0.1 // [0.1, 20.1]
-			capStyle = graphics.LineCapStyle(data[0] % 3)
-			joinStyle = graphics.LineJoinStyle(data[0] % 3)
+			capStyle = path.CapStyle(data[0] % 3)
+			joinStyle = path.JoinStyle(data[0] % 3)
 			if data[0]%2 == 1 {
 				dash = []float64{5, 3}
 				phase = float64(data[0])

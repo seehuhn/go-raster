@@ -20,7 +20,6 @@ import (
 	"math"
 
 	"seehuhn.de/go/geom/path"
-	"seehuhn.de/go/pdf/graphics"
 )
 
 var dashCases = []TestCase{
@@ -36,8 +35,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10},
 			DashPhase:  0,
@@ -52,8 +51,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{5, 3, 8},
 			DashPhase:  0,
@@ -68,8 +67,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{20, 2},
 			DashPhase:  0,
@@ -84,8 +83,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{2, 20},
 			DashPhase:  0,
@@ -100,8 +99,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 10},
 			DashPhase:  0,
@@ -116,8 +115,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{2, 2, 6, 2, 2, 10},
 			DashPhase:  0,
@@ -136,8 +135,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  0,
@@ -152,8 +151,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  5, // half of dash length (10/2)
@@ -168,8 +167,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  10, // full dash length, starts at gap
@@ -184,8 +183,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  15, // 10 + 5 = full pattern length
@@ -200,8 +199,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  -5, // negative wraps around
@@ -216,8 +215,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  -30, // large negative (wraps multiple times)
@@ -236,8 +235,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapRound,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{0, 5},
 			DashPhase:  0,
@@ -252,8 +251,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{0, 5},
 			DashPhase:  0,
@@ -268,8 +267,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapSquare,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapSquare,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{0, 5},
 			DashPhase:  0,
@@ -284,8 +283,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapRound,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{0, 5, 10, 5},
 			DashPhase:  0,
@@ -300,8 +299,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapRound,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{0, 5},
 			DashPhase:  3,
@@ -316,8 +315,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapRound,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{0, 5, 10, 5},
 			DashPhase:  7,
@@ -336,8 +335,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{40, 5},
 			DashPhase:  0,
@@ -352,8 +351,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{5, 40},
 			DashPhase:  20, // phase puts corner in gap
@@ -368,8 +367,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{33, 10}, // first segment length ~33
 			DashPhase:  0,
@@ -384,8 +383,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 23}, // gap ends at corner (~33)
 			DashPhase:  0,
@@ -400,8 +399,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      8,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{2, 8},
 			DashPhase:  0,
@@ -420,8 +419,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      10,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{15, 5},
 			DashPhase:  0,
@@ -436,8 +435,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      8,
-			Cap:        graphics.LineCapRound,
-			Join:       graphics.LineJoinRound,
+			Cap:        path.CapRound,
+			Join:       path.JoinRound,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  0,
@@ -452,8 +451,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      6,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{50, 10},
 			DashPhase:  0,
@@ -472,8 +471,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{10, 5},
 			DashPhase:  0,
@@ -488,8 +487,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{32, 5}, // 32*4=128 perimeter, dash shows at start/end
 			DashPhase:  0,
@@ -504,8 +503,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{20, 20},
 			DashPhase:  10, // offset so end is in gap
@@ -520,8 +519,8 @@ var dashCases = []TestCase{
 		Height: 64,
 		Op: Stroke{
 			Width:      4,
-			Cap:        graphics.LineCapButt,
-			Join:       graphics.LineJoinMiter,
+			Cap:        path.CapButt,
+			Join:       path.JoinMiter,
 			MiterLimit: 10,
 			Dash:       []float64{64, 10}, // long dash to span multiple sides
 			DashPhase:  32,                // phase puts us in same dash at start/end
