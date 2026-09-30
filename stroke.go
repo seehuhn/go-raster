@@ -545,9 +545,17 @@ func (r *Rasterizer) addSquare(center vec.Vec2, T vec.Vec2, d float64) {
 
 // applyDashPattern applies the dash pattern to flattened subpaths.
 // Results are stored in r.dashedSegs, r.dashedSegsOffsets and
-// r.dashedClosed.  A dash is closed only if it covers a whole closed
-// subpath; a dash which wraps around the start point of a closed subpath
-// is merged with the first dash into one open dash.
+// r.dashedClosed.
+//
+// Dash boundaries are placed by arc length along the subpath.  A boundary
+// which lies on a vertex, up to rounding, is moved onto it: a dash ending
+// there takes its cap from the segment before the corner, a dash starting
+// there from the segment after it, and a zero-length dash there from the
+// segment before it.
+//
+// A dash is closed only if it covers a whole closed subpath.  A dash which
+// runs into the start point of a closed subpath is merged with a dash
+// running on from it into one open dash, joined at the start point.
 func (r *Rasterizer) applyDashPattern() {
 	// Clear output buffers (preserving capacity)
 	r.dashedSegs = r.dashedSegs[:0]
@@ -581,23 +589,30 @@ func (r *Rasterizer) applyDashPattern() {
 	for spIdx := range numSubpaths {
 		segments := r.getSubpathSegments(spIdx)
 		closed := r.subpathClosed[spIdx]
-		if len(segments) == 0 {
+		n := len(segments)
+		if n == 0 {
 			continue
 		}
+
+		// arc length at each vertex, and the largest coordinate
+		cum := append(r.dashCum[:0], 0)
+		maxAbs := 0.0
+		for _, seg := range segments {
+			cum = append(cum, cum[len(cum)-1]+seg.Len)
+			maxAbs = max(maxAbs, math.Abs(seg.A.X), math.Abs(seg.A.Y), math.Abs(seg.B.X), math.Abs(seg.B.Y))
+		}
+		r.dashCum = cum
+		total := cum[n]
 
 		// guard against a pathologically fine dash pattern: splitting this
 		// subpath into more than maxDashSegments pieces would be sub-pixel on
 		// any reasonable canvas, so stroke it solid instead of hanging. The dash
 		// loop consumes one element per piece, so the piece count is
-		// subpathLen/patternLen periods times the elements per period; dividing
+		// total/patternLen periods times the elements per period; dividing
 		// by the un-doubled sum folds in the odd-length doubling of patternLen.
 		// A closed subpath taken down this path gets caps rather than a closing
 		// join, but only in this invisible regime.
-		subpathLen := 0.0
-		for _, seg := range segments {
-			subpathLen += seg.Len
-		}
-		if subpathLen*float64(dashLen)/rawSum > float64(maxDashSegments) {
+		if total*float64(dashLen)/rawSum > float64(maxDashSegments) {
 			dashStart := len(r.dashedSegs)
 			r.dashedSegs = append(r.dashedSegs, segments...)
 			r.dashedSegsOffsets = append(r.dashedSegsOffsets, dashStart)
@@ -605,137 +620,156 @@ func (r *Rasterizer) applyDashPattern() {
 			continue
 		}
 
-		// starting dash index and remaining distance in that dash,
-		// advancing past zero-length dash elements while consuming phase
-		dashIdx := 0
-		dist := phase
-		for dist > 0 && dist >= dash[dashIdx%dashLen] {
-			dist -= dash[dashIdx%dashLen]
-			dashIdx++
-		}
-		remaining := dash[dashIdx%dashLen] - dist
-		isOn := dashIdx%2 == 0 // even indices are "on"
-
-		// Handle zero-length dash at the very start of the path.
-		// This emits a point that will become a dot with round/square caps.
-		if isOn && remaining == 0 && len(segments) > 0 {
-			seg := segments[0]
-			r.dashedSegsOffsets = append(r.dashedSegsOffsets, len(r.dashedSegs))
-			r.dashedClosed = append(r.dashedClosed, false)
-			r.dashedSegs = append(r.dashedSegs, strokeSegment{A: seg.A, B: seg.A, T: seg.T, N: seg.N})
-			// Advance to next dash element
-			dashIdx++
-			remaining = dash[dashIdx%dashLen]
-			isOn = dashIdx%2 == 0
-		}
-
-		// Track if we started with "on" for closed path joining
-		startedOn := isOn
-		firstDashStart := -1  // index into dashedSegs where first dash starts
-		firstDashOffset := -1 // index into dashedSegsOffsets of the first dash
-
-		// Walk segments and split at dash boundaries
-		dashStartIdx := len(r.dashedSegs) // start of current dash in dashedSegs
-		segIdx := 0
-		segDist := 0.0 // distance along current segment
-
-		for segIdx < len(segments) {
-			seg := segments[segIdx]
-			segLen := seg.Len
-			segRemaining := segLen - segDist
-
-			if remaining >= segRemaining {
-				// Dash continues past this segment
-				if isOn {
-					// Add portion of segment from segDist to end
-					if segDist > 0 {
-						t := segDist / segLen
-						startPt := seg.A.Add(seg.B.Sub(seg.A).Mul(t))
-						r.dashedSegs = append(r.dashedSegs, strokeSegment{
-							A: startPt, B: seg.B,
-							T: seg.T, N: seg.N,
-							Len: segRemaining,
-						})
-					} else {
-						r.dashedSegs = append(r.dashedSegs, seg)
-					}
-				}
-				remaining -= segRemaining
-				segIdx++
-				segDist = 0
-			} else {
-				// Dash ends within this segment
-				endDist := segDist + remaining
-				t := endDist / segLen
-				splitPt := seg.A.Add(seg.B.Sub(seg.A).Mul(t))
-
-				if isOn {
-					// Add portion from segDist to splitPt
-					startT := segDist / segLen
-					startPt := seg.A.Add(seg.B.Sub(seg.A).Mul(startT))
-					d := splitPt.Sub(startPt)
-					dLen := d.Length()
-					if dLen > zeroLengthThreshold {
-						tVec := d.Mul(1 / dLen)
-						nVec := vec.Vec2{X: -tVec.Y, Y: tVec.X}
-						r.dashedSegs = append(r.dashedSegs, strokeSegment{
-							A: startPt, B: splitPt,
-							T: tVec, N: nVec,
-							Len: dLen,
-						})
-					} else if len(r.dashedSegs) == dashStartIdx {
-						// Zero-length dash: emit point with tangent from underlying segment
-						// This allows square/round caps to be drawn at this point
-						r.dashedSegs = append(r.dashedSegs, strokeSegment{
-							A: startPt, B: startPt,
-							T: seg.T, N: seg.N,
-						})
-					}
-
-					// Save first dash indices for closed path joining
-					if firstDashStart < 0 && len(r.dashedSegs) > dashStartIdx {
-						firstDashStart = dashStartIdx
-						firstDashOffset = len(r.dashedSegsOffsets)
-					}
-
-					// Emit current dash if non-empty
-					if len(r.dashedSegs) > dashStartIdx {
-						r.dashedSegsOffsets = append(r.dashedSegsOffsets, dashStartIdx)
-						r.dashedClosed = append(r.dashedClosed, false)
-						dashStartIdx = len(r.dashedSegs)
-					}
-				}
-
-				// Move to next dash
-				segDist = endDist
-				dashIdx++
-				remaining = dash[dashIdx%dashLen]
-				isOn = dashIdx%2 == 0
+		// The vertex positions also carry the rounding of the coordinates
+		// they are computed from, which scales with the coordinates rather
+		// than with the length of the subpath.
+		tol := dashSnapTolerance*total + dashSnapCoordTolerance*maxAbs
+		snap := func(pos float64) float64 {
+			// nearest vertex, if within the tolerance
+			k, _ := slices.BinarySearch(cum, pos)
+			best, dist := pos, tol
+			if k < len(cum) && cum[k]-pos <= dist {
+				best, dist = cum[k], cum[k]-pos
 			}
+			if k > 0 && pos-cum[k-1] <= dist {
+				best = cum[k-1]
+			}
+			return best
 		}
 
-		// Emit final dash if any
-		if len(r.dashedSegs) > dashStartIdx {
-			if closed && startedOn && isOn && firstDashStart >= 0 {
-				// The pattern wraps around the start point, so the final
-				// dash continues into the first one.  Move the final dash's
-				// segments in front of the first dash, making the merged
-				// dash contiguous, and shift the offsets in between.
-				segs := r.dashedSegs[firstDashStart:]
-				lastLen := len(r.dashedSegs) - dashStartIdx
-				slices.Reverse(segs)
-				slices.Reverse(segs[:lastLen])
-				slices.Reverse(segs[lastLen:])
-				for j := firstDashOffset + 1; j < len(r.dashedSegsOffsets); j++ {
-					r.dashedSegsOffsets[j] += lastLen
-				}
+		// indices into dashedSegsOffsets of the dashes running on from the
+		// start point and on to the end point, or -1
+		firstDash, lastDash := -1, -1
+
+		pos := -phase // start of the current pattern element
+		for i := 0; pos <= total+tol; i++ {
+			end := pos + dash[i%dashLen]
+			on := i%2 == 0 // even elements are "on"
+			a, b := snap(pos), snap(end)
+			pos = end
+			if !on || b < 0 || a > total {
 				continue
 			}
-			r.dashedSegsOffsets = append(r.dashedSegsOffsets, dashStartIdx)
-			// the dash is closed only if it covers the whole closed subpath
-			r.dashedClosed = append(r.dashedClosed, closed && startedOn && isOn)
+
+			if a == b {
+				r.addZeroLengthDash(segments, cum, a, closed)
+				continue
+			}
+			lo, hi := max(a, 0), min(b, total)
+			if lo >= hi {
+				continue // touches the subpath only at an end point
+			}
+
+			start := len(r.dashedSegs)
+			r.appendDashPieces(segments, cum, lo, hi)
+			if len(r.dashedSegs) == start {
+				// too short for any piece to survive
+				r.addZeroLengthDash(segments, cum, lo, closed)
+				continue
+			}
+			if a <= 0 && firstDash < 0 {
+				firstDash = len(r.dashedSegsOffsets)
+			}
+			if b >= total {
+				lastDash = len(r.dashedSegsOffsets)
+			}
+			r.dashedSegsOffsets = append(r.dashedSegsOffsets, start)
+			r.dashedClosed = append(r.dashedClosed, false)
 		}
+
+		if !closed || firstDash < 0 || lastDash < 0 {
+			continue
+		}
+		if lastDash == firstDash {
+			// a single dash covers the whole subpath
+			r.dashedClosed[lastDash] = true
+			continue
+		}
+
+		// The pattern runs on through the start point, so the last dash
+		// continues into the first one.  Move the last dash's segments in
+		// front of the first dash, making the merged dash contiguous, and
+		// shift the offsets in between.  Zero-length dashes recorded after
+		// the last dash keep their place.
+		firstStart := r.dashedSegsOffsets[firstDash]
+		lastStart := r.dashedSegsOffsets[lastDash]
+		lastEnd := len(r.dashedSegs)
+		if lastDash+1 < len(r.dashedSegsOffsets) {
+			lastEnd = r.dashedSegsOffsets[lastDash+1]
+		}
+		segs := r.dashedSegs[firstStart:lastEnd]
+		lastLen := lastEnd - lastStart
+		slices.Reverse(segs)
+		slices.Reverse(segs[:lastLen])
+		slices.Reverse(segs[lastLen:])
+		for j := firstDash + 1; j < lastDash; j++ {
+			r.dashedSegsOffsets[j] += lastLen
+		}
+		r.dashedSegsOffsets = slices.Delete(r.dashedSegsOffsets, lastDash, lastDash+1)
+		r.dashedClosed = slices.Delete(r.dashedClosed, lastDash, lastDash+1)
 	}
+}
+
+// appendDashPieces appends the parts of the segments between arc lengths lo
+// and hi to r.dashedSegs, where cum holds the arc length at each vertex.  A
+// dash which ends on a vertex takes in no part of the segment after it, and
+// one which starts on a vertex no part of the segment before it.  Pieces too
+// short to stroke are dropped.
+func (r *Rasterizer) appendDashPieces(segments []strokeSegment, cum []float64, lo, hi float64) {
+	k, _ := slices.BinarySearch(cum, lo)
+	if k == len(cum) || cum[k] > lo {
+		k-- // lo lies inside segment k
+	}
+	for ; k < len(segments) && cum[k] < hi; k++ {
+		seg := &segments[k]
+		a, b := max(lo, cum[k]), min(hi, cum[k+1])
+		if b-a <= zeroLengthThreshold {
+			continue
+		}
+		piece := *seg
+		piece.Len = b - a
+		if a > cum[k] {
+			piece.A = seg.A.Add(seg.B.Sub(seg.A).Mul((a - cum[k]) / seg.Len))
+		}
+		if b < cum[k+1] {
+			piece.B = seg.A.Add(seg.B.Sub(seg.A).Mul((b - cum[k]) / seg.Len))
+		}
+		r.dashedSegs = append(r.dashedSegs, piece)
+	}
+}
+
+// addZeroLengthDash records a zero-length dash at arc length pos as a dash
+// of its own, a single point with the tangent of the path there.  On a
+// vertex, the tangent is that of the segment before it, except at the start
+// of an open subpath, which has no segment before it.
+func (r *Rasterizer) addZeroLengthDash(segments []strokeSegment, cum []float64, pos float64, closed bool) {
+	n := len(segments)
+	k, found := slices.BinarySearch(cum, pos)
+	var seg *strokeSegment
+	switch {
+	case !found:
+		seg = &segments[k-1] // pos lies inside segment k-1
+	case k > 0:
+		seg = &segments[k-1]
+	case closed:
+		seg = &segments[n-1]
+	default:
+		seg = &segments[0]
+	}
+
+	var pt vec.Vec2
+	switch {
+	case found && k > 0:
+		pt = seg.B
+	case found:
+		pt = segments[0].A
+	default:
+		pt = seg.A.Add(seg.B.Sub(seg.A).Mul((pos - cum[k-1]) / seg.Len))
+	}
+
+	r.dashedSegsOffsets = append(r.dashedSegsOffsets, len(r.dashedSegs))
+	r.dashedClosed = append(r.dashedClosed, false)
+	r.dashedSegs = append(r.dashedSegs, strokeSegment{A: pt, B: pt, T: seg.T, N: seg.N})
 }
 
 // fillStrokeOutlines fills all collected stroke polygons as a compound path.

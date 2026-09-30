@@ -334,7 +334,9 @@ Each subpath in a multi-subpath path is treated independently; the pattern resta
 
 In a closed dashed subpath, if the first dash starts on and the last ends on, join them with a line join rather than caps.
 
-If a corner falls within an on-segment, paint it with the join style. If within an off-segment, skip it. If a dash ends exactly at a corner, paint the cap before the join.
+If a corner falls within an on-segment, paint it with the join style. If within an off-segment, skip it. A dash which ends exactly at a corner gets its cap before the corner: the cap points along the segment leading into the corner, and no join is painted. Likewise, a dash which starts exactly at a corner begins on the segment leading out of it, and a zero-length dash at a corner takes the tangent of the segment leading into it.
+
+Whether a dash boundary lies exactly at a corner is decided up to rounding. The boundaries and the corners are both placed by summing lengths, whose rounding errors differ, so a boundary which falls on a corner in exact arithmetic can land on either side of it. A boundary within a small tolerance of a corner is therefore moved onto it. The tolerance is 10⁻⁹ of the subpath's length plus a few units in the last place of its largest coordinate, which covers the rounding of both sums and of the coordinates the segment lengths come from. The same applies at the two ends of a subpath: a dash which only touches an end of a subpath draws nothing, whatever the rounding, while a zero-length dash at an end is painted with the tangent of the segment there.
 
 Arc length along a segment from A to B is ||B − A||. Summing segment lengths gives cumulative arc length. Since dashing follows flattening, this measures length along the polygonal approximation, closely matching true arc length (error is O(ε²)).
 

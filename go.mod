@@ -4,13 +4,14 @@ go 1.25.0
 
 require (
 	golang.org/x/image v0.44.0
-	seehuhn.de/go/geom v0.7.5-0.20260921084206-b22179b8dfaa
-	seehuhn.de/go/pdf v0.7.5-0.20260921090750-361931923cf0
+	seehuhn.de/go/geom v0.7.5-0.20260929191733-e984e09ea32e
+	seehuhn.de/go/pdf v0.7.5-0.20260930053432-6d642760f6ed
 )
 
 require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	golang.org/x/text v0.40.0 // indirect
+	seehuhn.de/go/dag v1.0.0 // indirect
 	seehuhn.de/go/icc v0.7.5-0.20260828074917-6f4ceb03c75b // indirect
 	seehuhn.de/go/membudget v0.7.4 // indirect
 	seehuhn.de/go/postscript v0.7.5-0.20260915125511-cb1c60cfde12 // indirect

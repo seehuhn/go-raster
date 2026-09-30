@@ -102,6 +102,7 @@ type Rasterizer struct {
 	dashedSegs        []strokeSegment // all dashed segments, contiguous
 	dashedSegsOffsets []int           // start index of each dashed subpath
 	dashedClosed      []bool          // whether each dashed subpath is closed
+	dashCum           []float64       // arc length at each vertex of the subpath being dashed
 
 	// ctmSigmaMax is the largest singular value of CTM's linear part,
 	// computed once per Stroke call and used to bound device-space scaling
@@ -654,4 +655,18 @@ const (
 	// dash array from driving the dash loop out of range and hanging the
 	// rasterizer.
 	maxDashSegments = 1 << 16
+
+	// dashSnapTolerance is how close, relative to the length of the subpath,
+	// a dash boundary has to come to a vertex to count as lying on it.  The
+	// boundaries and the vertex positions are sums of at most a few times
+	// maxDashSegments terms, or of the subpath's segment lengths, so their
+	// rounding error stays well below this.  The shift is at most this
+	// fraction of the subpath's length, invisible at any practical scale.
+	dashSnapTolerance = 1e-9
+
+	// dashSnapCoordTolerance is the part of the dash snapping tolerance which
+	// scales with the largest coordinate of the subpath, allowing for the
+	// rounding of the coordinates a segment length is computed from: a few
+	// units in the last place, over a few segments.
+	dashSnapCoordTolerance = 64 * 0x1p-52
 )
